@@ -14,6 +14,7 @@ import logging
 import sys
 from datetime import datetime, timezone
 from typing import Any
+from sqlcoach.redaction import CredentialRedactionFilter
 
 _VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
@@ -72,6 +73,7 @@ def configure_logging(level: str = "INFO", json_output: bool = False) -> None:
 
     handler = logging.StreamHandler(stream=sys.stderr)
     setattr(handler, _HANDLER_MARKER, True)
+    handler.addFilter(CredentialRedactionFilter())
 
     if json_output:
         handler.setFormatter(_JsonFormatter())
