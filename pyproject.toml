@@ -30,8 +30,8 @@ dev = [
     "pytest>=8.0,<9.0",
 ]
 
-# No [project.scripts] entry point yet — the `sqlcoach` console command is
-# wired up in US1.5 once src/sqlcoach/cli/main.py defines a real Typer app.
+[project.scripts]
+sqlcoach = "sqlcoach.cli.main:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
