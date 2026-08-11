@@ -77,3 +77,34 @@ class TestOutputFormats:
         assert payload["message"] == "hello json"
         assert payload["logger"] == "sqlcoach.test"
         assert "timestamp" in payload
+
+
+class TestCredentialRedactionIsWiredIn:
+    """Proves US2.5 end-to-end: a DSN password never reaches log output,
+    through the real configure_logging() entry point, at DEBUG level,
+    in both human-readable and JSON modes (NFR-2.5: "under any logging
+    mode").
+    """
+
+    def test_password_is_redacted_in_human_readable_mode_at_debug_level(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        configure_logging(level="DEBUG", json_output=False)
+        logging.getLogger("sqlcoach.database").debug(
+            "Connecting with %s", "postgresql://alice:s3cr3t@localhost/mydb"
+        )
+        captured = capsys.readouterr()
+        assert "s3cr3t" not in captured.err
+        assert "***REDACTED***" in captured.err
+
+    def test_password_is_redacted_in_json_mode_at_debug_level(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        configure_logging(level="DEBUG", json_output=True)
+        logging.getLogger("sqlcoach.database").debug(
+            "Connecting with %s", "postgresql://alice:s3cr3t@localhost/mydb"
+        )
+        captured = capsys.readouterr()
+        assert "s3cr3t" not in captured.err
+        payload = json.loads(captured.err.strip().splitlines()[-1])
+        assert "s3cr3t" not in payload["message"]

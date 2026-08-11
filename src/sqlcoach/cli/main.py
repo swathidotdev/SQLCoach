@@ -1,14 +1,15 @@
 """SQLCoach CLI entry point.
 
 This module owns only argument parsing, input validation, invoking
-application services (none exist yet -- from Phase 2 onward), and
-output formatting (NFR-X.2). Business logic must never live here.
+application services, and output formatting (NFR-X.2). Business logic
+must never live here -- every command below does nothing but collect
+its arguments and call exactly one service function (FR-2.10).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import typer
 
@@ -54,6 +55,7 @@ def main(
     # since it represents the most specific, most recently expressed intent.
     configure_logging(level=settings.log_level, json_output=json_logs or settings.json_logs)
 
+
 def _run_service(service_call: Callable[[], None]) -> None:
     """Invoke a service and translate a not-yet-implemented signal into
     the CLI's standard user-facing message.
@@ -67,7 +69,6 @@ def _run_service(service_call: Callable[[], None]) -> None:
         service_call()
     except NotYetImplementedError as exc:
         typer.echo(f"'{exc}' is not yet implemented.")
-
 
 
 @app.command()
