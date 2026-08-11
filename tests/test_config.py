@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+import pytest
 from pathlib import Path
 
-import pytest
+from pydantic import json
 
 from sqlcoach.config import Settings, load_settings
 from sqlcoach.exceptions import ConfigError
+from sqlcoach.logging_config import configure_logging
 
 
 class TestDefaults:
@@ -108,3 +111,33 @@ class TestSettingsImmutability:
         settings = Settings()
         with pytest.raises(Exception):
             settings.log_level = "DEBUG"  # type: ignore[misc]
+
+class TestCredentialRedactionIsWiredIn:
+    """Proves US2.5 end-to-end: a DSN password never reaches log output,
+    through the real configure_logging() entry point, at DEBUG level,
+    in both human-readable and JSON modes (NFR-2.5: "under any logging
+    mode").
+    """
+
+    def test_password_is_redacted_in_human_readable_mode_at_debug_level(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        configure_logging(level="DEBUG", json_output=False)
+        logging.getLogger("sqlcoach.database").debug(
+            "Connecting with %s", "postgresql://alice:s3cr3t@localhost/mydb"
+        )
+        captured = capsys.readouterr()
+        assert "s3cr3t" not in captured.err
+        assert "***REDACTED***" in captured.err
+
+    def test_password_is_redacted_in_json_mode_at_debug_level(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        configure_logging(level="DEBUG", json_output=True)
+        logging.getLogger("sqlcoach.database").debug(
+            "Connecting with %s", "postgresql://alice:s3cr3t@localhost/mydb"
+        )
+        captured = capsys.readouterr()
+        assert "s3cr3t" not in captured.err
+        payload = json.loads(captured.err.strip().splitlines()[-1])
+        assert "s3cr3t" not in payload["message"]
