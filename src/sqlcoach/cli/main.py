@@ -15,6 +15,13 @@ import typer
 from sqlcoach.config import load_settings
 from sqlcoach.exceptions import SQLCoachError
 from sqlcoach.logging_config import configure_logging
+from sqlcoach.reports.services import (
+    NotYetImplementedError,
+    analyze_service,
+    audit_service,
+    compare_service,
+    report_service,
+)
 
 app = typer.Typer(
     name="sqlcoach",
@@ -47,10 +54,20 @@ def main(
     # since it represents the most specific, most recently expressed intent.
     configure_logging(level=settings.log_level, json_output=json_logs or settings.json_logs)
 
+def _run_service(service_call: Callable[[], None]) -> None:
+    """Invoke a service and translate a not-yet-implemented signal into
+    the CLI's standard user-facing message.
 
-def _not_yet_implemented(command_name: str) -> None:
-    """Shared stub behavior for commands whose logic lands in Phase 3/4."""
-    typer.echo(f"'{command_name}' is not yet implemented.")
+    Every command function below reduces to exactly one call to this
+    helper -- this is the only place command output formatting happens,
+    keeping business logic (even placeholder business logic) entirely
+    out of the command functions themselves (NFR-X.2, FR-2.10).
+    """
+    try:
+        service_call()
+    except NotYetImplementedError as exc:
+        typer.echo(f"'{exc}' is not yet implemented.")
+
 
 
 @app.command()
@@ -60,7 +77,7 @@ def analyze(
     ),
 ) -> None:
     """Analyze a SQL workload and report performance issues."""
-    _not_yet_implemented("analyze")
+    _run_service(lambda: analyze_service(source))
 
 
 @app.command()
@@ -70,7 +87,7 @@ def audit(
     ),
 ) -> None:
     """Run a full database health check (missing/duplicate/unused indexes, anti-patterns)."""
-    _not_yet_implemented("audit")
+    _run_service(lambda: audit_service(db_url))
 
 
 @app.command()
@@ -80,7 +97,7 @@ def report(
     ),
 ) -> None:
     """Generate a human-readable performance report."""
-    _not_yet_implemented("report")
+    _run_service(lambda: report_service(output))
 
 
 @app.command()
@@ -93,7 +110,7 @@ def compare(
     ),
 ) -> None:
     """Compare performance characteristics between two versions of a query."""
-    _not_yet_implemented("compare")
+    _run_service(lambda: compare_service(before, after))
 
 
 if __name__ == "__main__":
