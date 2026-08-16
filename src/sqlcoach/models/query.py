@@ -38,6 +38,13 @@ class Query(BaseModel):
         call_count: Number of times this query was observed/executed,
             when known (e.g. from pg_stat_statements). Defaults to 1
             for a single observed occurrence.
+        statement_type: Normalized statement type keyword (e.g.
+            "SELECT", "INSERT", "UPDATE", "DELETE"), when derivable
+            from parsing (FR-3.1.3). None if not yet determined.
+        referenced_tables: Table names referenced by this query, when
+            derivable from parsing (FR-3.1.3). Empty tuple if not yet
+            determined, or if the statement references no tables
+            (e.g. "SELECT 1").
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -47,6 +54,8 @@ class Query(BaseModel):
     source_location: Optional[str] = None
     execution_time_ms: Optional[float] = Field(default=None, ge=0)
     call_count: int = Field(default=1, ge=1)
+    statement_type: Optional[str] = None
+    referenced_tables: tuple[str, ...] = Field(default_factory=tuple)
 
     @field_validator("text")
     @classmethod
