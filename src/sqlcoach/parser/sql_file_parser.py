@@ -28,28 +28,12 @@ from sqlglot import exp
 from sqlglot.errors import ParseError as SqlglotParseError
 
 from sqlcoach.models.query import Query, QuerySource
+from sqlcoach.parser.sql_ast_utils import extract_tables, statement_type
 
 logger = logging.getLogger(__name__)
 
 _DIALECT = "postgres"
 _SNIPPET_MAX_LENGTH = 80
-
-
-def _extract_tables(statement: exp.Expression) -> tuple[str, ...]:
-    """Return distinct table names referenced by `statement`, in
-    first-seen order.
-    """
-    seen: list[str] = []
-    for table in statement.find_all(exp.Table):
-        name = table.name
-        if name and name not in seen:
-            seen.append(name)
-    return tuple(seen)
-
-
-def _statement_type(statement: exp.Expression) -> str:
-    """Return a normalized statement type keyword, e.g. "SELECT"."""
-    return type(statement).__name__.upper()
 
 
 def _snippet(text: str) -> str:
@@ -166,6 +150,6 @@ class SqlFileParser:
             text=statement.sql(dialect=_DIALECT),
             source=QuerySource.SQL_FILE,
             source_location=location,
-            statement_type=_statement_type(statement),
-            referenced_tables=_extract_tables(statement),
+            statement_type=statement_type(statement),
+            referenced_tables=extract_tables(statement),
         )
