@@ -162,4 +162,6 @@ class TestMalformedExecutionTime:
             results = parser.parse(log_file)
 
         assert results == []
-        assert any("Skipping log block" in message for message in caplog.messages)
+        warning_messages = [m for m in caplog.messages if "Skipping log block" in m]
+        assert len(warning_messages) == 1
+        assert "SELECT 1" in warning_messages[0]

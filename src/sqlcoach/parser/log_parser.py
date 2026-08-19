@@ -42,7 +42,7 @@ import sqlglot
 from sqlglot.errors import ParseError as SqlglotParseError
 
 from sqlcoach.models.query import Query, QuerySource
-from sqlcoach.parser.sql_ast_utils import extract_tables, statement_type
+from sqlcoach.parser.sql_ast_utils import extract_tables, snippet, statement_type
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,9 @@ class LogParser:
     "broken" log entry the way there is a broken SQL statement, since
     log parsing here works by pattern matching rather than a strict
     grammar (FR-3.1.4 is satisfied by construction: unmatched text
-    never raises, it's just not extracted).
+    never raises, it's just not extracted). The one case that does
+    fail explicitly -- an unparseable execution-time value -- is
+    reported with a line/block number and a snippet, per NFR-3.1.2.
     """
 
     def parse(self, source: Union[str, Path]) -> list[Query]:
@@ -118,20 +120,22 @@ class LogParser:
                 execution_time_ms = float(raw_time)
             except ValueError:
                 logger.warning(
-                    "Skipping log block %d in %s: unparseable execution time %r",
+                    "Skipping log block %d in %s: unparseable execution time %r "
+                    "| snippet: %r",
                     index,
                     source_location,
                     raw_time,
+                    snippet(sql_text),
                 )
                 continue
-            statement_type_value, referenced_tables = _try_enrich_with_parse(sql_text)
+            resolved_statement_type, referenced_tables = _try_enrich_with_parse(sql_text)
             queries.append(
                 Query(
                     text=sql_text,
                     source=QuerySource.LOG_FILE,
                     source_location=f"{source_location}:block {index}",
                     execution_time_ms=execution_time_ms,
-                    statement_type=statement_type_value,
+                    statement_type=resolved_statement_type,
                     referenced_tables=referenced_tables,
                 )
             )
@@ -163,23 +167,25 @@ class LogParser:
                 execution_time_ms = float(raw_time)
             except ValueError:
                 logger.warning(
-                    "Skipping log entry at %s line %d: unparseable execution time %r",
+                    "Skipping log entry at %s line %d: unparseable execution time %r "
+                    "| snippet: %r",
                     source_location,
                     line_number,
                     raw_time,
+                    snippet(sql_text),
                 )
                 index = next_index
                 continue
 
             if sql_text:
-                statement_type_value, referenced_tables = _try_enrich_with_parse(sql_text)
+                resolved_statement_type, referenced_tables = _try_enrich_with_parse(sql_text)
                 queries.append(
                     Query(
                         text=sql_text,
                         source=QuerySource.LOG_FILE,
                         source_location=f"{source_location}:line {line_number}",
                         execution_time_ms=execution_time_ms,
-                        statement_type=statement_type_value,
+                        statement_type=resolved_statement_type,
                         referenced_tables=referenced_tables,
                     )
                 )

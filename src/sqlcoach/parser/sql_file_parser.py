@@ -28,19 +28,11 @@ from sqlglot import exp
 from sqlglot.errors import ParseError as SqlglotParseError
 
 from sqlcoach.models.query import Query, QuerySource
-from sqlcoach.parser.sql_ast_utils import extract_tables, statement_type
+from sqlcoach.parser.sql_ast_utils import extract_tables, snippet, statement_type
 
 logger = logging.getLogger(__name__)
 
 _DIALECT = "postgres"
-_SNIPPET_MAX_LENGTH = 80
-
-
-def _snippet(text: str) -> str:
-    stripped = text.strip()
-    if len(stripped) <= _SNIPPET_MAX_LENGTH:
-        return stripped
-    return stripped[:_SNIPPET_MAX_LENGTH] + "..."
 
 
 def _split_with_line_numbers(text: str) -> list[tuple[int, str]]:
@@ -125,7 +117,7 @@ class SqlFileParser:
                     source_location,
                     line_number,
                     str(exc).splitlines()[0],
-                    _snippet(stripped),
+                    snippet(stripped),
                 )
                 continue
             queries.append(
