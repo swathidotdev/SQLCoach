@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from sqlcoach.analyzer.base import AnalysisContext, Finding, PlanDetector
+from sqlcoach.analyzer.detectors.expensive_sort import ExpensiveSortDetector
 from sqlcoach.analyzer.detectors.join_strategy import JoinStrategyDetector
 from sqlcoach.analyzer.detectors.seq_scan import SequentialScanDetector
 from sqlcoach.models.execution_plan import ExecutionPlan, PlanNode
@@ -32,12 +33,13 @@ def default_detectors() -> tuple[PlanDetector, ...]:
     """Return the default set of plan detectors, in run order.
 
     This is the single registration point for detectors. Later sprints
-    (expensive sort, cardinality misestimation) add one entry each
-    here; nothing else changes (OCP).
+    (cardinality misestimation) add one entry each here; nothing else
+    changes (OCP).
     """
     return (
         SequentialScanDetector(),
         JoinStrategyDetector(),
+        ExpensiveSortDetector(),
     )
 
 

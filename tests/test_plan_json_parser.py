@@ -150,3 +150,43 @@ class TestDeeplyNestedPlans:
         # NFR-X.3: no raw stdlib exception may cross this boundary.
         with pytest.raises(ParsingError):
             parse_explain_json(self._nested_payload(5000))
+
+class TestSortFieldExtraction:
+    def test_populates_sort_fields_when_present(self) -> None:
+        payload = [{
+            "Plan": {
+                "Node Type": "Sort",
+                "Total Cost": 100.0,
+                "Plan Rows": 1000,
+                "Actual Rows": 1000,
+                "Sort Key": ["created_at DESC", "id"],
+                "Sort Method": "external merge",
+                "Sort Space Type": "Disk",
+                "Sort Space Used": 45_000,
+            }
+        }]
+
+        plan = parse_explain_json(payload)
+
+        assert plan.root.sort_key == ("created_at DESC", "id")
+        assert plan.root.sort_method == "external merge"
+        assert plan.root.sort_space_type == "Disk"
+        assert plan.root.sort_space_used_kb == 45_000
+
+    def test_sort_fields_default_when_absent(self) -> None:
+        # A non-sort node (or a plan-only EXPLAIN) carries none of them.
+        payload = [{
+            "Plan": {
+                "Node Type": "Seq Scan",
+                "Relation Name": "users",
+                "Total Cost": 10.0,
+                "Plan Rows": 5,
+            }
+        }]
+
+        plan = parse_explain_json(payload)
+
+        assert plan.root.sort_key == ()
+        assert plan.root.sort_method is None
+        assert plan.root.sort_space_type is None
+        assert plan.root.sort_space_used_kb is None

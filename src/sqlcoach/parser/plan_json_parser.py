@@ -27,6 +27,13 @@ def _parse_node(raw_node: dict[str, Any]) -> PlanNode:
             actual_rows=raw_node.get("Actual Rows"),
             actual_time_ms=raw_node.get("Actual Total Time"),
             children=children,
+            # Sort fields (present only on sort nodes, and only when
+            # ANALYZE was used); all optional, so .get() never raises.
+            # "Sort Space Used" is already reported in KB by PostgreSQL.
+            sort_key=tuple(raw_node.get("Sort Key", [])),
+            sort_method=raw_node.get("Sort Method"),
+            sort_space_type=raw_node.get("Sort Space Type"),
+            sort_space_used_kb=raw_node.get("Sort Space Used"),
         )
     except KeyError as exc:
         raise ParsingError(
