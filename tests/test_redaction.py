@@ -78,3 +78,44 @@ class TestCredentialRedactionFilter:
     def test_filter_always_returns_true(self) -> None:
         record = self._make_record("plain message")
         assert CredentialRedactionFilter().filter(record) is True
+
+
+
+class TestMappingStyleLogArguments:
+    """`logging` accepts a single mapping for %(name)s-style messages.
+    Coercing it to a tuple yields a tuple of keys and breaks formatting.
+    """
+
+    def test_mapping_args_stay_a_mapping_and_are_redacted(self) -> None:
+        record = logging.LogRecord(
+            name="test",
+            level=logging.INFO,
+            pathname="p",
+            lineno=1,
+            msg="connecting to %(dsn)s as %(user)s",
+            args={"dsn": "postgresql://alice:s3cret@localhost/mydb", "user": "alice"},
+            exc_info=None,
+        )
+
+        CredentialRedactionFilter().filter(record)
+
+        assert isinstance(record.args, dict)
+        message = record.getMessage()
+        assert "s3cret" not in message
+        assert "***REDACTED***" in message
+        assert "alice" in message
+
+    def test_tuple_args_still_work(self) -> None:
+        record = logging.LogRecord(
+            name="test",
+            level=logging.INFO,
+            pathname="p",
+            lineno=1,
+            msg="connecting to %s",
+            args=("postgresql://alice:s3cret@localhost/mydb",),
+            exc_info=None,
+        )
+
+        CredentialRedactionFilter().filter(record)
+
+        assert "s3cret" not in record.getMessage()

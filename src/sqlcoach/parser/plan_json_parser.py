@@ -49,7 +49,12 @@ def parse_explain_json(raw_payload: list[dict[str, Any]]) -> ExecutionPlan:
     Raises:
         ParsingError: If the payload doesn't have the expected shape
             (empty list, missing "Plan" key, or a plan node missing a
-            required field).
+            required field), or if the plan tree is nested more deeply
+            than the interpreter's recursion limit allows. Real
+            PostgreSQL plans nest far shallower than that, so the
+            depth guard exists to convert a stdlib RecursionError into
+            a domain error at this boundary (NFR-X.3) rather than to
+            support genuinely unbounded trees.
     """
     if not raw_payload:
         raise ParsingError("EXPLAIN returned an empty result")
@@ -62,7 +67,13 @@ def parse_explain_json(raw_payload: list[dict[str, Any]]) -> ExecutionPlan:
             details={"payload_keys": list(top_level.keys())},
         )
 
-    root = _parse_node(top_level["Plan"])
+    try:
+        root = _parse_node(top_level["Plan"])
+    except RecursionError as exc:
+        raise ParsingError(
+            "EXPLAIN plan tree is nested too deeply to parse",
+            details={"reason": "recursion limit exceeded while walking plan nodes"},
+        ) from exc
 
     return ExecutionPlan(
         root=root,

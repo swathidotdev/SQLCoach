@@ -7,6 +7,7 @@ import logging
 
 import pytest
 
+from sqlcoach.exceptions import ConfigError
 from sqlcoach.logging_config import configure_logging
 
 
@@ -31,10 +32,13 @@ class TestLevelHandling:
         configure_logging(level="warning")
         assert logging.getLogger().level == logging.WARNING
 
-    def test_invalid_level_raises_value_error(self) -> None:
-        with pytest.raises(ValueError):
+    def test_invalid_level_raises_config_error(self) -> None:
+        with pytest.raises(ConfigError):
             configure_logging(level="NOT_A_LEVEL")
 
+    def test_invalid_level_raises_config_error(self) -> None:
+        with pytest.raises(ConfigError):
+            configure_logging(level="NOT_A_LEVEL")
 
 class TestHandlerIdempotency:
     def test_repeated_calls_do_not_stack_handlers(self) -> None:

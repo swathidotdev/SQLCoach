@@ -4,6 +4,11 @@ This module owns only argument parsing, input validation, invoking
 application services, and output formatting (NFR-X.2). Business logic
 must never live here -- every command below does nothing but collect
 its arguments and call exactly one service function (FR-2.10).
+
+It is also the single place where domain errors are translated into
+user-facing messages and process exit codes (FR-2.9). Nothing below
+the CLI needs to know about exit codes, and nothing above the service
+layer should ever see a traceback.
 """
 
 from __future__ import annotations
@@ -14,7 +19,14 @@ from typing import Callable, Optional
 import typer
 
 from sqlcoach.config import load_settings
-from sqlcoach.exceptions import SQLCoachError
+from sqlcoach.exceptions import (
+    ConfigError,
+    DatabaseConnectionError,
+    MutatingStatementError,
+    ParsingError,
+    SQLCoachError,
+    ValidationError,
+)
 from sqlcoach.logging_config import configure_logging
 from sqlcoach.reports.services import (
     NotYetImplementedError,
@@ -29,6 +41,28 @@ app = typer.Typer(
     help="PostgreSQL-first SQL performance analyzer and index advisor.",
     no_args_is_help=True,
 )
+
+# Exit-code map (FR-2.9). Exit code 2 is deliberately absent: Click
+# (and therefore Typer) already reserves it for usage errors such as a
+# missing argument, and reusing it would make "you typed the command
+# wrong" indistinguishable from a real failure in a CI log. New error
+# types are added here without touching any command function.
+_EXIT_CODES: dict[type[SQLCoachError], int] = {
+    ConfigError: 1,
+    ValidationError: 3,
+    ParsingError: 4,
+    DatabaseConnectionError: 5,
+    MutatingStatementError: 6,
+}
+_DEFAULT_ERROR_EXIT_CODE = 1
+
+
+def _exit_code_for(error: SQLCoachError) -> int:
+    """Return the exit code for `error`, matching the most specific type first."""
+    for error_type, code in _EXIT_CODES.items():
+        if isinstance(error, error_type):
+            return code
+    return _DEFAULT_ERROR_EXIT_CODE
 
 
 @app.callback()
@@ -47,28 +81,32 @@ def main(
     """Load settings and configure logging before any subcommand runs."""
     try:
         settings = load_settings(config_file)
+        # A --json-logs flag on the command line always wins over config/env,
+        # since it represents the most specific, most recently expressed intent.
+        configure_logging(
+            level=settings.log_level, json_output=json_logs or settings.json_logs
+        )
     except SQLCoachError as exc:
         typer.secho(f"Configuration error: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1) from exc
-
-    # A --json-logs flag on the command line always wins over config/env,
-    # since it represents the most specific, most recently expressed intent.
-    configure_logging(level=settings.log_level, json_output=json_logs or settings.json_logs)
+        raise typer.Exit(code=_exit_code_for(exc)) from exc
 
 
 def _run_service(service_call: Callable[[], None]) -> None:
-    """Invoke a service and translate a not-yet-implemented signal into
-    the CLI's standard user-facing message.
+    """Invoke a service and translate its outcome into CLI output.
 
     Every command function below reduces to exactly one call to this
-    helper -- this is the only place command output formatting happens,
-    keeping business logic (even placeholder business logic) entirely
-    out of the command functions themselves (NFR-X.2, FR-2.10).
+    helper -- this is the only place command output formatting and
+    exit-code mapping happen, keeping business logic (even placeholder
+    business logic) entirely out of the command functions themselves
+    (NFR-X.2, FR-2.10).
     """
     try:
         service_call()
     except NotYetImplementedError as exc:
         typer.echo(f"'{exc}' is not yet implemented.")
+    except SQLCoachError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=_exit_code_for(exc)) from exc
 
 
 @app.command()

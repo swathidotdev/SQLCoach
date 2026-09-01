@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from sqlcoach.cli.main import app
+from sqlcoach.exceptions import (
+    DatabaseConnectionError,
+    ParsingError,
+    SQLCoachError,
+)
 
 runner = CliRunner()
 
@@ -64,3 +70,46 @@ class TestConfigErrorHandling:
 
         assert result.exit_code == 0
         assert "not yet implemented" in result.output
+
+
+class TestDomainErrorHandling:
+    """FR-2.9: domain errors become a clean message plus a stable exit
+    code, never a traceback.
+    """
+
+    def test_domain_error_from_a_service_exits_with_its_mapped_code(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def failing_service(_source: object) -> None:
+            raise DatabaseConnectionError("Could not connect to PostgreSQL")
+
+        monkeypatch.setattr("sqlcoach.cli.main.analyze_service", failing_service)
+
+        result = runner.invoke(app, ["analyze"])
+
+        assert result.exit_code == 5
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+
+    def test_different_error_types_get_different_exit_codes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def failing_service(_source: object) -> None:
+            raise ParsingError("queries.sql is not valid SQL")
+
+        monkeypatch.setattr("sqlcoach.cli.main.analyze_service", failing_service)
+
+        result = runner.invoke(app, ["analyze"])
+
+        assert result.exit_code == 4
+
+    def test_unmapped_domain_error_falls_back_to_exit_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def failing_service(_source: object) -> None:
+            raise SQLCoachError("something went wrong")
+
+        monkeypatch.setattr("sqlcoach.cli.main.analyze_service", failing_service)
+
+        result = runner.invoke(app, ["analyze"])
+
+        assert result.exit_code == 1
