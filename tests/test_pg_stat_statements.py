@@ -16,7 +16,7 @@ from sqlcoach.database.pg_stat_statements import (
     fetch_top_queries,
     is_pg_stat_statements_available,
 )
-from sqlcoach.exceptions import DatabaseConnectionError
+from sqlcoach.exceptions import DatabaseConnectionError, ValidationError
 from sqlcoach.models.query import QuerySource
 
 
@@ -105,7 +105,7 @@ class TestFetchTopQueriesWhenAvailable:
     def test_rejects_limit_below_one(self) -> None:
         connection, _ = _mock_connection()
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValidationError):
             fetch_top_queries(connection, limit=0)
 
     def test_skips_rows_with_empty_query_text(self) -> None:
@@ -128,3 +128,44 @@ class TestFetchTopQueriesWhenAvailable:
 
         with pytest.raises(DatabaseConnectionError):
             fetch_top_queries(connection)
+
+
+class TestTimingFieldMapping:
+    def test_preserves_both_mean_and_total_execution_time(self) -> None:
+        connection, cursor = _mock_connection()
+        cursor.fetchone.return_value = (1,)
+        cursor.fetchall.return_value = [
+            ("SELECT * FROM orders WHERE user_id = $1", 2000, 5000.0, 2.5),
+        ]
+
+        results = fetch_top_queries(connection)
+
+        assert len(results) == 1
+        assert results[0].execution_time_ms == 2.5
+        assert results[0].total_execution_time_ms == 5000.0
+        assert results[0].call_count == 2000
+
+    def test_populates_normalized_text_for_fingerprinting(self) -> None:
+        connection, cursor = _mock_connection()
+        cursor.fetchone.return_value = (1,)
+        cursor.fetchall.return_value = [("select  *  from  orders", 1, 1.0, 1.0)]
+
+        results = fetch_top_queries(connection)
+
+        assert results[0].text == "select  *  from  orders"
+        assert results[0].normalized_text == "SELECT * FROM orders"
+
+    def test_skips_rows_with_non_positive_call_count(self) -> None:
+        # A statistics reset racing this read could otherwise leak a raw
+        # pydantic error (call_count has a ge=1 constraint) out of the
+        # database layer.
+        connection, cursor = _mock_connection()
+        cursor.fetchone.return_value = (1,)
+        cursor.fetchall.return_value = [
+            ("SELECT 1", 0, 0.0, 0.0),
+            ("SELECT 2", 3, 9.0, 3.0),
+        ]
+
+        results = fetch_top_queries(connection)
+
+        assert [r.text for r in results] == ["SELECT 2"]

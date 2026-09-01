@@ -14,6 +14,8 @@ import logging
 import sys
 from datetime import datetime, timezone
 from typing import Any
+
+from sqlcoach.exceptions import ConfigError
 from sqlcoach.redaction import CredentialRedactionFilter
 
 _VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
@@ -55,12 +57,17 @@ def configure_logging(level: str = "INFO", json_output: bool = False) -> None:
             human-readable text (for interactive use).
 
     Raises:
-        ValueError: If `level` is not a recognized log level.
+        ConfigError: If `level` is not a recognized log level. A
+            domain error rather than a bare ValueError, so the CLI's
+            single SQLCoachError handler catches it (NFR-X.3).
     """
     normalized_level = level.upper()
     if normalized_level not in _VALID_LOG_LEVELS:
         valid = ", ".join(sorted(_VALID_LOG_LEVELS))
-        raise ValueError(f"level must be one of: {valid} (got {level!r})")
+        raise ConfigError(
+            f"level must be one of: {valid}",
+            details={"level": level},
+        )
 
     root_logger = logging.getLogger()
 

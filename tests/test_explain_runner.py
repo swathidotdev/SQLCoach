@@ -13,8 +13,11 @@ import psycopg
 import pytest
 
 from sqlcoach.database.explain_runner import ExplainRunner, is_mutating_statement
-from sqlcoach.exceptions import DatabaseConnectionError, MutatingStatementError
-
+from sqlcoach.exceptions import (
+    DatabaseConnectionError,
+    MutatingStatementError,
+    ValidationError,
+)
 
 class TestIsMutatingStatement:
     @pytest.mark.parametrize(
@@ -150,3 +153,66 @@ class TestErrorHandling:
 
         with pytest.raises(DatabaseConnectionError):
             runner.explain(connection, "SELECT 1")
+
+
+
+class TestWriteDetectionBeyondRootNode:
+    """A root-node-only check is not enough: PostgreSQL executes
+    data-modifying CTEs for real under EXPLAIN ANALYZE, and sqlglot
+    parses them as a plain Select.
+    """
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "WITH d AS (DELETE FROM users WHERE id = 1 RETURNING *) SELECT * FROM d",
+            "WITH i AS (INSERT INTO audit (id) VALUES (1) RETURNING *) SELECT * FROM i",
+            "WITH u AS (UPDATE users SET name = 'x' RETURNING *) SELECT * FROM u",
+        ],
+    )
+    def test_data_modifying_cte_is_treated_as_mutating(self, sql: str) -> None:
+        assert is_mutating_statement(sql) is True
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "SELECT * FROM users FOR UPDATE",
+            "SELECT * FROM users FOR SHARE",
+        ],
+    )
+    def test_row_locking_select_is_treated_as_mutating(self, sql: str) -> None:
+        assert is_mutating_statement(sql) is True
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "WITH x AS (SELECT 1) SELECT * FROM x",
+            "SELECT * FROM (SELECT id FROM orders) AS s",
+            "SELECT * FROM t WHERE id IN (SELECT id FROM u)",
+        ],
+    )
+    def test_read_only_nesting_is_not_flagged(self, sql: str) -> None:
+        assert is_mutating_statement(sql) is False
+
+    def test_explain_blocks_a_data_modifying_cte_without_touching_the_database(
+        self,
+    ) -> None:
+        connection = MagicMock()
+        runner = ExplainRunner()
+
+        with pytest.raises(MutatingStatementError):
+            runner.explain(
+                connection,
+                "WITH d AS (DELETE FROM users RETURNING *) SELECT * FROM d",
+            )
+
+        connection.cursor.assert_not_called()
+
+
+class TestStatementTimeoutValidation:
+    @pytest.mark.parametrize("seconds", [0, -1])
+    def test_rejects_non_positive_timeout(self, seconds: int) -> None:
+        # PostgreSQL reads `statement_timeout = 0` as "no timeout", so
+        # silently accepting 0 would disable the very guard it configures.
+        with pytest.raises(ValidationError):
+            ExplainRunner(statement_timeout_seconds=seconds)

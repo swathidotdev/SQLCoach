@@ -13,16 +13,15 @@ import psycopg
 import pytest
 
 from sqlcoach.database.connection import DatabaseConnection
-from sqlcoach.exceptions import DatabaseConnectionError
-
+from sqlcoach.exceptions import DatabaseConnectionError, ValidationError
 
 class TestConstructionValidation:
     def test_requires_dsn_or_host(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValidationError):
             DatabaseConnection()
 
     def test_rejects_both_dsn_and_host(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValidationError):
             DatabaseConnection(dsn="postgresql://localhost/db", host="localhost")
 
 

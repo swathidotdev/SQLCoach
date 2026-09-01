@@ -121,3 +121,32 @@ class TestMalformedPayload:
 
         with pytest.raises(ParsingError):
             parse_explain_json(payload)
+
+
+class TestDeeplyNestedPlans:
+    @staticmethod
+    def _nested_payload(depth: int) -> list[dict]:
+        node: dict = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "t",
+            "Total Cost": 1.0,
+            "Plan Rows": 1,
+        }
+        for _ in range(depth):
+            node = {
+                "Node Type": "Nested Loop",
+                "Total Cost": 2.0,
+                "Plan Rows": 2,
+                "Plans": [node],
+            }
+        return [{"Plan": node, "Planning Time": 0.1, "Execution Time": 1.0}]
+
+    def test_handles_realistically_deep_plans(self) -> None:
+        # Far deeper than any plan PostgreSQL produces in practice.
+        plan = parse_explain_json(self._nested_payload(200))
+        assert plan.root.node_type == "Nested Loop"
+
+    def test_pathological_depth_raises_parsing_error_not_recursion_error(self) -> None:
+        # NFR-X.3: no raw stdlib exception may cross this boundary.
+        with pytest.raises(ParsingError):
+            parse_explain_json(self._nested_payload(5000))

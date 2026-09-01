@@ -5,9 +5,10 @@ analyzer, advisor, and CLI layers never need to import psycopg
 themselves (FR-2.6). Connection failures are always raised as
 DatabaseConnectionError, never a raw psycopg exception (FR-2.7).
 
-Credential redaction for logging is deliberately out of scope here --
-it is delivered as its own story (US2.5) since it touches the logging
-layer as much as this one.
+Credential redaction for logging is handled globally by
+`sqlcoach.redaction.CredentialRedactionFilter`, which is attached to
+every handler by `configure_logging()` -- this module does not need to
+redact anything itself (US2.5, NFR-2.5).
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import Optional
 
 import psycopg
 
-from sqlcoach.exceptions import DatabaseConnectionError
+from sqlcoach.exceptions import DatabaseConnectionError, ValidationError
 
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 10
 DEFAULT_PORT = 5432
@@ -52,8 +53,10 @@ class DatabaseConnection:
         connect_timeout_seconds: int = DEFAULT_CONNECT_TIMEOUT_SECONDS,
     ) -> None:
         if bool(dsn) == bool(host):
-            raise ValueError(
-                "Provide exactly one of `dsn` or `host` (with discrete params), not both or neither."
+            raise ValidationError(
+                "Provide exactly one of `dsn` or `host` (with discrete params), "
+                "not both or neither.",
+                details={"dsn_given": bool(dsn), "host_given": bool(host)},
             )
 
         self._connect_kwargs: dict[str, object]

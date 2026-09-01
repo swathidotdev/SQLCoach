@@ -62,3 +62,42 @@ class TestImmutability:
         query = Query(text="SELECT 1;", source=QuerySource.SQL_FILE)
         with pytest.raises(ValidationError):
             query.text = "SELECT 2;"  # type: ignore[misc]
+
+
+class TestWorkloadTimingFields:
+    def test_total_execution_time_is_optional(self) -> None:
+        query = Query(text="SELECT 1", source=QuerySource.SQL_FILE)
+        assert query.total_execution_time_ms is None
+
+    def test_records_mean_and_total_independently(self) -> None:
+        query = Query(
+            text="SELECT 1",
+            source=QuerySource.PG_STAT_STATEMENTS,
+            execution_time_ms=2.5,
+            total_execution_time_ms=5000.0,
+            call_count=2000,
+        )
+        assert query.execution_time_ms == 2.5
+        assert query.total_execution_time_ms == 5000.0
+
+    def test_rejects_negative_total_execution_time(self) -> None:
+        with pytest.raises(ValidationError):
+            Query(
+                text="SELECT 1",
+                source=QuerySource.SQL_FILE,
+                total_execution_time_ms=-1.0,
+            )
+
+
+class TestFingerprint:
+    def test_prefers_normalized_text(self) -> None:
+        query = Query(
+            text="select  1",
+            normalized_text="SELECT 1",
+            source=QuerySource.SQL_FILE,
+        )
+        assert query.fingerprint == "SELECT 1"
+
+    def test_falls_back_to_stripped_raw_text_when_unparsed(self) -> None:
+        query = Query(text="  SELEC 1  ", source=QuerySource.LOG_FILE)
+        assert query.fingerprint == "SELEC 1"

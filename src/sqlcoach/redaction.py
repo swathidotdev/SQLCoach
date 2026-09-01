@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Any
 
 _REDACTED = "***REDACTED***"
 
@@ -38,6 +39,27 @@ def redact_dsn(text: str) -> str:
     return redacted
 
 
+def _redact_value(value: Any) -> Any:
+    """Redact a single log argument, leaving non-string values alone."""
+    return redact_dsn(value) if isinstance(value, str) else value
+
+
+def _redact_args(args: Any) -> Any:
+    """Redact log record arguments without changing their container type.
+
+    `logging` accepts either a tuple of positional arguments (for
+    `%s`-style messages) or a single mapping (for `%(name)s`-style
+    messages). Coercing the mapping into a tuple would turn it into a
+    tuple of its *keys* and break formatting with "format requires a
+    mapping", so the mapping shape is preserved here.
+    """
+    if isinstance(args, dict):
+        return {key: _redact_value(value) for key, value in args.items()}
+    if isinstance(args, tuple):
+        return tuple(_redact_value(value) for value in args)
+    return args
+
+
 class CredentialRedactionFilter(logging.Filter):
     """A logging filter that redacts DSN passwords from every record.
 
@@ -48,9 +70,10 @@ class CredentialRedactionFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        # str() rather than an isinstance check: a non-string msg (an
+        # exception object, say) can still stringify to something
+        # containing a DSN, and logging stringifies it anyway.
         record.msg = redact_dsn(str(record.msg))
         if record.args:
-            record.args = tuple(
-                redact_dsn(arg) if isinstance(arg, str) else arg for arg in record.args
-            )
+            record.args = _redact_args(record.args)
         return True

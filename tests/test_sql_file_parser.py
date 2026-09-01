@@ -162,3 +162,97 @@ class TestResilientErrorHandling:
         # grammar and isn't asserted here.
         results = parser.parse(sql_file)
         assert isinstance(results, list)
+
+
+class TestVerbatimTextAndNormalization:
+    """`Query.text` must be what the user wrote; `normalized_text` is
+    the canonical form used for grouping equivalent queries.
+    """
+
+    def test_text_is_preserved_verbatim(
+        self, tmp_path: Path, parser: SqlFileParser
+    ) -> None:
+        sql_file = tmp_path / "q.sql"
+        sql_file.write_text(
+            "SELECT o.id, o.total\n"
+            "FROM orders o\n"
+            "WHERE o.created_at > NOW() - INTERVAL '7 days';\n"
+        )
+
+        results = parser.parse(sql_file)
+
+        assert results[0].text == (
+            "SELECT o.id, o.total\n"
+            "FROM orders o\n"
+            "WHERE o.created_at > NOW() - INTERVAL '7 days'"
+        )
+
+    def test_normalized_text_is_populated_and_canonical(
+        self, tmp_path: Path, parser: SqlFileParser
+    ) -> None:
+        sql_file = tmp_path / "q.sql"
+        sql_file.write_text("select   *   from    users   where id = 1;")
+
+        results = parser.parse(sql_file)
+
+        normalized = results[0].normalized_text
+        assert normalized is not None
+        assert normalized == "SELECT * FROM users WHERE id = 1"
+
+    def test_equivalent_queries_share_a_fingerprint(
+        self, tmp_path: Path, parser: SqlFileParser
+    ) -> None:
+        sql_file = tmp_path / "q.sql"
+        sql_file.write_text(
+            "SELECT id FROM users WHERE id = 1;\n"
+            "select   id\nfrom users\nwhere id = 1;\n"
+        )
+
+        results = parser.parse(sql_file)
+
+        assert len(results) == 2
+        assert results[0].text != results[1].text
+        assert results[0].fingerprint == results[1].fingerprint
+
+
+class TestStatementLineNumbers:
+    def test_every_statement_reports_its_own_starting_line(
+        self, tmp_path: Path, parser: SqlFileParser
+    ) -> None:
+        sql_file = tmp_path / "q.sql"
+        sql_file.write_text(
+            "-- header comment\n"
+            "SELECT 1;\n"
+            "\n"
+            "SELECT 2;\n"
+            "\n"
+            "\n"
+            "SELECT 3;\n"
+        )
+
+        results = parser.parse(sql_file)
+
+        assert [r.source_location for r in results] == [
+            f"{sql_file}:line 1",
+            f"{sql_file}:line 4",
+            f"{sql_file}:line 7",
+        ]
+
+    def test_dollar_quoted_body_does_not_shift_later_line_numbers(
+        self, tmp_path: Path, parser: SqlFileParser
+    ) -> None:
+        sql_file = tmp_path / "q.sql"
+        sql_file.write_text(
+            "CREATE FUNCTION f() RETURNS int AS $$\n"
+            "BEGIN\n"
+            "  RETURN 1;\n"
+            "END;\n"
+            "$$ LANGUAGE plpgsql;\n"
+            "SELECT * FROM users;\n"
+        )
+
+        results = parser.parse(sql_file)
+
+        assert len(results) == 2
+        assert results[1].statement_type == "SELECT"
+        assert results[1].source_location == f"{sql_file}:line 6"
