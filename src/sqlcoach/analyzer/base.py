@@ -21,7 +21,11 @@ from typing import Optional, Protocol, Union, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from sqlcoach.config import Settings
+from sqlcoach.config import (
+    DEFAULT_NESTED_LOOP_ROW_THRESHOLD,
+    DEFAULT_SEQ_SCAN_ROW_THRESHOLD,
+    Settings,
+)
 from sqlcoach.models.execution_plan import PlanNode
 
 #: Supporting numeric evidence attached to a Finding (row counts,
@@ -88,22 +92,38 @@ class AnalysisContext(BaseModel):
     Segregation. It also lets tests construct a context with exactly
     the thresholds under test, without building a whole Settings.
 
+    The fields carry defaults purely as a test convenience, so a test
+    exercising one detector need not specify thresholds for the others.
+    In production the context is always built via `from_settings`, which
+    supplies every value explicitly from validated Settings -- so these
+    defaults are never the operative values at runtime, and the shared
+    constants keep them from drifting out of step with Settings.
+
     Attributes:
         seq_scan_row_threshold: A sequential scan returning at least
             this many rows is flagged as a candidate for indexing
             (FR-3.4.1). Row count is taken from actual rows when the
             plan was produced with ANALYZE, otherwise the planner's
             estimate.
+        nested_loop_row_threshold: A nested-loop join whose outer side
+            drives at least this many inner-side iterations is flagged
+            as a likely bottleneck (FR-3.4.2).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    seq_scan_row_threshold: int = Field(ge=1)
+    seq_scan_row_threshold: int = Field(default=DEFAULT_SEQ_SCAN_ROW_THRESHOLD, ge=1)
+    nested_loop_row_threshold: int = Field(
+        default=DEFAULT_NESTED_LOOP_ROW_THRESHOLD, ge=1
+    )
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "AnalysisContext":
         """Build an AnalysisContext from validated Settings."""
-        return cls(seq_scan_row_threshold=settings.seq_scan_row_threshold)
+        return cls(
+            seq_scan_row_threshold=settings.seq_scan_row_threshold,
+            nested_loop_row_threshold=settings.nested_loop_row_threshold,
+        )
 
 
 @runtime_checkable

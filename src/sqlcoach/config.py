@@ -28,6 +28,12 @@ _VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
 _ENV_VAR_PREFIX = "SQLCOACH_"
 
+# Analyzer threshold defaults, named so both Settings (user-facing
+# defaults) and AnalysisContext (test-convenience defaults) reference
+# one source of truth rather than duplicating literals.
+DEFAULT_SEQ_SCAN_ROW_THRESHOLD = 10_000
+DEFAULT_NESTED_LOOP_ROW_THRESHOLD = 10_000
+
 
 class Settings(BaseModel):
     """SQLCoach runtime configuration.
@@ -41,13 +47,17 @@ class Settings(BaseModel):
         seq_scan_row_threshold: A sequential scan returning at least
             this many rows is flagged by the execution-plan analyzer as
             a candidate for indexing (FR-3.4.1). Must be at least 1.
+        nested_loop_row_threshold: A nested-loop join whose outer side
+            drives at least this many inner-side iterations is flagged
+            as a likely bottleneck (FR-3.4.2). Must be at least 1.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     log_level: str = "INFO"
     json_logs: bool = False
-    seq_scan_row_threshold: int = Field(default=10_000, ge=1)
+    seq_scan_row_threshold: int = Field(default=DEFAULT_SEQ_SCAN_ROW_THRESHOLD, ge=1)
+    nested_loop_row_threshold: int = Field(default=DEFAULT_NESTED_LOOP_ROW_THRESHOLD, ge=1)
 
     @field_validator("log_level")
     @classmethod
@@ -80,7 +90,7 @@ def _read_env_overrides() -> dict[str, Any]:
     """Collect environment variable overrides for known Settings fields.
 
     Recognized variables: SQLCOACH_LOG_LEVEL, SQLCOACH_JSON_LOGS,
-    SQLCOACH_SEQ_SCAN_ROW_THRESHOLD.
+    SQLCOACH_SEQ_SCAN_ROW_THRESHOLD, SQLCOACH_NESTED_LOOP_ROW_THRESHOLD.
     """
     overrides: dict[str, Any] = {}
 
@@ -97,6 +107,12 @@ def _read_env_overrides() -> dict[str, Any]:
         # Passed through as-is; Pydantic coerces and validates it, and a
         # bad value surfaces as a ConfigError via load_settings' handler.
         overrides["seq_scan_row_threshold"] = raw_seq_scan_threshold
+
+    raw_nested_loop_threshold = os.environ.get(
+        f"{_ENV_VAR_PREFIX}NESTED_LOOP_ROW_THRESHOLD"
+    )
+    if raw_nested_loop_threshold is not None:
+        overrides["nested_loop_row_threshold"] = raw_nested_loop_threshold
 
     return overrides
 
