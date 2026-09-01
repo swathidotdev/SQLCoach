@@ -15,6 +15,8 @@ class TestValidConstruction:
         assert query.source is QuerySource.SQL_FILE
         assert query.call_count == 1
         assert query.execution_time_ms is None
+        assert query.statement_type is None
+        assert query.referenced_tables == ()
 
     def test_full_valid_query(self) -> None:
         query = Query(
@@ -23,10 +25,14 @@ class TestValidConstruction:
             source_location="orders.log:42",
             execution_time_ms=820.5,
             call_count=3,
+            statement_type="SELECT",
+            referenced_tables=("orders",),
         )
         assert query.source_location == "orders.log:42"
         assert query.execution_time_ms == 820.5
         assert query.call_count == 3
+        assert query.statement_type == "SELECT"
+        assert query.referenced_tables == ("orders",)
 
 
 class TestValidation:
