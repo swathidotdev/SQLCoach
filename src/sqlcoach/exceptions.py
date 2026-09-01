@@ -54,11 +54,11 @@ class ValidationError(SQLCoachError):
 
 
 class ParsingError(SQLCoachError):
-    """Raised when a SQL file or PostgreSQL log excerpt cannot be
-    parsed into `Query` objects.
+    """Raised when a SQL file, PostgreSQL log excerpt, or EXPLAIN JSON
+    payload cannot be parsed into the corresponding domain model.
 
-    Reserved for Sprint 3 (SQL/log parsing); defined now per FR-1.8 so
-    the hierarchy is stable before parser code depends on it.
+    Introduced in Sprint 3 for SQL/log parsing; also used from Sprint 4
+    onward for malformed EXPLAIN JSON payloads.
     """
 
 
@@ -68,4 +68,13 @@ class DatabaseConnectionError(SQLCoachError):
     psycopg3/driver exception to callers.
 
     Reserved for Sprint 2 (database layer); defined now per FR-1.8.
+    """
+
+
+class MutatingStatementError(SQLCoachError):
+    """Raised when EXPLAIN ANALYZE is refused because a statement
+    appears to modify data and the caller has not explicitly confirmed
+    the intent to run it for real (FR-3.2.2).
+
+    Introduced in Sprint 4 (EXPLAIN ANALYZE execution).
     """

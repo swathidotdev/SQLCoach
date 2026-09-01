@@ -39,3 +39,6 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: requires a live PostgreSQL instance (dockerized setup lands in Phase 5).",
+]
