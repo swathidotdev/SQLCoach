@@ -12,7 +12,13 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, ValidationError as PydanticValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError as PydanticValidationError,
+    field_validator,
+)
 
 from sqlcoach.exceptions import ConfigError
 
@@ -32,12 +38,16 @@ class Settings(BaseModel):
         json_logs: When True, emit structured JSON log lines instead
             of human-readable text (mirrors the CLI's --json-logs
             flag; a file/env value lets it be set without the flag).
+        seq_scan_row_threshold: A sequential scan returning at least
+            this many rows is flagged by the execution-plan analyzer as
+            a candidate for indexing (FR-3.4.1). Must be at least 1.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     log_level: str = "INFO"
     json_logs: bool = False
+    seq_scan_row_threshold: int = Field(default=10_000, ge=1)
 
     @field_validator("log_level")
     @classmethod
@@ -69,7 +79,8 @@ def _read_toml_file(path: Path) -> dict[str, Any]:
 def _read_env_overrides() -> dict[str, Any]:
     """Collect environment variable overrides for known Settings fields.
 
-    Recognized variables: SQLCOACH_LOG_LEVEL, SQLCOACH_JSON_LOGS.
+    Recognized variables: SQLCOACH_LOG_LEVEL, SQLCOACH_JSON_LOGS,
+    SQLCOACH_SEQ_SCAN_ROW_THRESHOLD.
     """
     overrides: dict[str, Any] = {}
 
@@ -80,6 +91,12 @@ def _read_env_overrides() -> dict[str, Any]:
     raw_json_logs = os.environ.get(f"{_ENV_VAR_PREFIX}JSON_LOGS")
     if raw_json_logs is not None:
         overrides["json_logs"] = raw_json_logs.strip().lower() in {"1", "true", "yes", "on"}
+
+    raw_seq_scan_threshold = os.environ.get(f"{_ENV_VAR_PREFIX}SEQ_SCAN_ROW_THRESHOLD")
+    if raw_seq_scan_threshold is not None:
+        # Passed through as-is; Pydantic coerces and validates it, and a
+        # bad value surfaces as a ConfigError via load_settings' handler.
+        overrides["seq_scan_row_threshold"] = raw_seq_scan_threshold
 
     return overrides
 
