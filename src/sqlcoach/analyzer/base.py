@@ -22,6 +22,8 @@ from typing import Optional, Protocol, Union, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field
 
 from sqlcoach.config import (
+    DEFAULT_CARDINALITY_MIN_ROWS,
+    DEFAULT_CARDINALITY_MISESTIMATION_RATIO,
     DEFAULT_NESTED_LOOP_ROW_THRESHOLD,
     DEFAULT_SEQ_SCAN_ROW_THRESHOLD,
     Settings,
@@ -108,6 +110,12 @@ class AnalysisContext(BaseModel):
         nested_loop_row_threshold: A nested-loop join whose outer side
             drives at least this many inner-side iterations is flagged
             as a likely bottleneck (FR-3.4.2).
+        cardinality_misestimation_ratio: The estimated/actual row-count
+            divergence factor (either direction) at or above which a
+            node is flagged as a cardinality misestimation (FR-3.4.4).
+        cardinality_min_rows: Floor on the larger of estimated/actual
+            rows below which a cardinality misestimation is ignored, to
+            suppress tiny-count noise.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -116,6 +124,10 @@ class AnalysisContext(BaseModel):
     nested_loop_row_threshold: int = Field(
         default=DEFAULT_NESTED_LOOP_ROW_THRESHOLD, ge=1
     )
+    cardinality_misestimation_ratio: float = Field(
+        default=DEFAULT_CARDINALITY_MISESTIMATION_RATIO, gt=1.0
+    )
+    cardinality_min_rows: int = Field(default=DEFAULT_CARDINALITY_MIN_ROWS, ge=0)
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "AnalysisContext":
@@ -123,6 +135,8 @@ class AnalysisContext(BaseModel):
         return cls(
             seq_scan_row_threshold=settings.seq_scan_row_threshold,
             nested_loop_row_threshold=settings.nested_loop_row_threshold,
+            cardinality_misestimation_ratio=settings.cardinality_misestimation_ratio,
+            cardinality_min_rows=settings.cardinality_min_rows,
         )
 
 

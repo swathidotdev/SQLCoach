@@ -2,8 +2,8 @@
 
 This module owns only argument parsing, input validation, invoking
 application services, and output formatting (NFR-X.2). Business logic
-must never live here -- every command below does nothing but collect
-its arguments and call exactly one service function (FR-2.10).
+must never live here -- every command below collects its arguments,
+calls exactly one service function, and renders the result (FR-2.10).
 
 It is also the single place where domain errors are translated into
 user-facing messages and process exit codes (FR-2.9). Nothing below
@@ -18,7 +18,7 @@ from typing import Callable, Optional
 
 import typer
 
-from sqlcoach.config import load_settings
+from sqlcoach.config import Settings, load_settings
 from sqlcoach.exceptions import (
     ConfigError,
     DatabaseConnectionError,
@@ -29,6 +29,7 @@ from sqlcoach.exceptions import (
 )
 from sqlcoach.logging_config import configure_logging
 from sqlcoach.reports.services import (
+    AnalyzeResult,
     NotYetImplementedError,
     analyze_service,
     audit_service,
@@ -67,6 +68,7 @@ def _exit_code_for(error: SQLCoachError) -> int:
 
 @app.callback()
 def main(
+    ctx: typer.Context,
     config_file: Optional[Path] = typer.Option(
         None,
         "--config",
@@ -78,7 +80,12 @@ def main(
         help="Emit structured JSON logs instead of human-readable text.",
     ),
 ) -> None:
-    """Load settings and configure logging before any subcommand runs."""
+    """Load settings and configure logging before any subcommand runs.
+
+    The loaded Settings are stashed on the Typer context so each command
+    reuses this single, precedence-correct load (defaults < file < env)
+    rather than reloading -- keeping --config honored everywhere.
+    """
     try:
         settings = load_settings(config_file)
         # A --json-logs flag on the command line always wins over config/env,
@@ -90,15 +97,21 @@ def main(
         typer.secho(f"Configuration error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=_exit_code_for(exc)) from exc
 
+    ctx.obj = settings
+
+
+def _settings_from(ctx: typer.Context) -> Settings:
+    """Return the Settings the callback loaded for this invocation."""
+    # ctx.obj is always set by the callback above before any command runs.
+    return ctx.obj  # type: ignore[return-value]
+
 
 def _run_service(service_call: Callable[[], None]) -> None:
     """Invoke a service and translate its outcome into CLI output.
 
-    Every command function below reduces to exactly one call to this
-    helper -- this is the only place command output formatting and
-    exit-code mapping happen, keeping business logic (even placeholder
-    business logic) entirely out of the command functions themselves
-    (NFR-X.2, FR-2.10).
+    This is the only place command output formatting and exit-code
+    mapping happen, keeping business logic out of the command functions
+    themselves (NFR-X.2, FR-2.10).
     """
     try:
         service_call()
@@ -109,14 +122,66 @@ def _run_service(service_call: Callable[[], None]) -> None:
         raise typer.Exit(code=_exit_code_for(exc)) from exc
 
 
+def _render_analyze_result(result: AnalyzeResult) -> None:
+    """Print an AnalyzeResult in human-readable form."""
+    typer.echo(f"Parsed {result.queries_parsed} query(ies).")
+
+    if not result.analyzed_against_database:
+        typer.echo(
+            "No --db-url given, so no execution plans were analyzed. "
+            "Pass --db-url to run EXPLAIN ANALYZE and detect plan-level issues."
+        )
+        return
+
+    typer.echo(f"Analyzed {result.queries_analyzed} query(ies) against the database.")
+
+    if not result.findings:
+        typer.echo("No execution-plan issues detected.")
+        return
+
+    typer.echo(f"Found {len(result.findings)} issue(s):")
+    for finding in result.findings:
+        location = f" on {finding.relation_name}" if finding.relation_name else ""
+        typer.echo(f"  [{finding.severity.value.upper()}] {finding.code}{location}")
+        typer.echo(f"      {finding.summary}")
+
+
 @app.command()
 def analyze(
+    ctx: typer.Context,
     source: Optional[Path] = typer.Argument(
-        None, help="SQL file, log file, or source to analyze. (Not yet implemented.)"
+        None, help="Path to a .sql file to analyze."
+    ),
+    db_url: Optional[str] = typer.Option(
+        None,
+        "--db-url",
+        help=(
+            "PostgreSQL connection string. When given, each parsed query is run "
+            "through EXPLAIN ANALYZE and its execution plan inspected."
+        ),
+    ),
+    confirm_mutations: bool = typer.Option(
+        False,
+        "--confirm-mutations",
+        help=(
+            "Allow EXPLAIN ANALYZE to run statements that modify data or take locks. "
+            "Off by default; such statements are skipped unless this is set."
+        ),
     ),
 ) -> None:
     """Analyze a SQL workload and report performance issues."""
-    _run_service(lambda: analyze_service(source))
+    settings = _settings_from(ctx)
+
+    def run() -> None:
+        result = analyze_service(
+            source,
+            db_url=db_url,
+            confirm_mutations=confirm_mutations,
+            settings=settings,
+        )
+        _render_analyze_result(result)
+
+    _run_service(run)
 
 
 @app.command()
