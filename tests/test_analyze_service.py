@@ -141,3 +141,56 @@ class TestAgainstDatabase:
         assert result.queries_parsed == 2
         assert result.queries_analyzed == 1
         assert len(result.findings) == 1
+
+
+class TestIndexRecommendationsInPipeline:
+    def test_filtered_query_produces_a_recommendation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source = _write_sql(tmp_path, "SELECT * FROM users WHERE email = 'a@b.com';")
+
+        connection = MagicMock()
+        db_cm = MagicMock()
+        db_cm.__enter__.return_value = connection
+        db_cm.__exit__.return_value = False
+        monkeypatch.setattr(services, "DatabaseConnection", lambda **_: db_cm)
+
+        runner = MagicMock()
+        runner.explain.return_value = _LARGE_SEQ_SCAN_PLAN
+        monkeypatch.setattr(services, "ExplainRunner", lambda: runner)
+
+        result = analyze_service(
+            source, db_url="postgresql://localhost/db", settings=Settings()
+        )
+
+        assert len(result.index_recommendations) == 1
+        rec = result.index_recommendations[0]
+        assert rec.table == "users"
+        assert rec.columns == ("email",)
+        assert rec.create_statement == "CREATE INDEX idx_users_email ON users (email);"
+
+    def test_unfiltered_query_yields_no_recommendation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source = _write_sql(tmp_path, "SELECT * FROM users;")
+
+        connection = MagicMock()
+        db_cm = MagicMock()
+        db_cm.__enter__.return_value = connection
+        db_cm.__exit__.return_value = False
+        monkeypatch.setattr(services, "DatabaseConnection", lambda **_: db_cm)
+
+        runner = MagicMock()
+        runner.explain.return_value = _LARGE_SEQ_SCAN_PLAN
+        monkeypatch.setattr(services, "ExplainRunner", lambda: runner)
+
+        result = analyze_service(
+            source, db_url="postgresql://localhost/db", settings=Settings()
+        )
+
+        assert result.index_recommendations == ()
+
+    def test_static_parse_has_no_recommendations(self, tmp_path: Path) -> None:
+        source = _write_sql(tmp_path, "SELECT * FROM users WHERE email = 'a@b.com';")
+        result = analyze_service(source, settings=Settings())
+        assert result.index_recommendations == ()
