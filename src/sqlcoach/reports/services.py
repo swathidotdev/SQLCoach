@@ -1,15 +1,16 @@
 """Application services for CLI commands.
 
 These functions are the seam between the CLI (`cli/main.py`) and the
-domain layers (parser, database, analyzer). The CLI parses arguments
-and renders output; a service does the actual orchestration and returns
-plain data. Business logic never lives in the CLI (NFR-X.2, FR-2.10).
+domain layers (parser, database, analyzer, advisor). The CLI parses
+arguments and renders output; a service does the actual orchestration
+and returns plain data. Business logic never lives in the CLI
+(NFR-X.2, FR-2.10).
 
 `audit`, `report`, and `compare` remain placeholders until their
-sprints (11, 9, and 10 respectively). `analyze` is implemented here as
-of Sprint 6: it parses a `.sql` file into queries and, when a database
-URL is supplied, runs each query through EXPLAIN ANALYZE and the plan
-analyzer, returning the detected findings.
+sprints (11, 9, and 10 respectively). `analyze` parses a `.sql` file
+into queries and, when a database URL is supplied, runs each query
+through EXPLAIN ANALYZE, the plan analyzer, and the index advisor,
+returning the detected findings and index recommendations.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from sqlcoach.advisor.index_advisor import IndexAdvisor
 from sqlcoach.analyzer.base import AnalysisContext, Finding
 from sqlcoach.analyzer.plan_analyzer import PlanAnalyzer
 from sqlcoach.config import Settings, load_settings
@@ -30,6 +32,7 @@ from sqlcoach.exceptions import (
     MutatingStatementError,
     ValidationError,
 )
+from sqlcoach.models.index_recommendation import IndexRecommendation
 from sqlcoach.models.query import Query
 from sqlcoach.parser.plan_json_parser import parse_explain_json
 from sqlcoach.parser.sql_file_parser import SqlFileParser
@@ -62,6 +65,9 @@ class AnalyzeResult(BaseModel):
         analyzed_against_database: Whether a live database was used.
         findings: All plan findings, across every analyzed query, in
             deterministic order.
+        index_recommendations: Deduplicated index recommendations across
+            the workload. Empty for a static parse (no plan, no
+            recommendation possible without one).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -70,6 +76,7 @@ class AnalyzeResult(BaseModel):
     queries_analyzed: int = Field(ge=0)
     analyzed_against_database: bool
     findings: tuple[Finding, ...] = Field(default_factory=tuple)
+    index_recommendations: tuple[IndexRecommendation, ...] = Field(default_factory=tuple)
 
 
 def analyze_service(
@@ -80,25 +87,26 @@ def analyze_service(
     settings: Optional[Settings] = None,
 ) -> AnalyzeResult:
     """Parse a SQL file and, if a database URL is given, analyze each
-    query's execution plan.
+    query's execution plan and recommend indexes.
 
     Args:
         source: Path to a `.sql` file to analyze.
         db_url: Optional PostgreSQL connection string. When provided,
             each parsed query is run through EXPLAIN ANALYZE and its
-            plan inspected by the analyzer. When omitted, only static
-            parsing is performed -- there is no execution plan to
-            analyze without a live database.
+            plan inspected. When omitted, only static parsing is
+            performed -- there is no execution plan to analyze, and no
+            index recommendation possible, without a live database.
         confirm_mutations: Passed through to the EXPLAIN runner; must be
             True to let EXPLAIN ANALYZE execute statements that modify
             data or take locks (FR-3.2.2).
-        settings: Validated settings supplying analyzer thresholds. When
-            omitted, loaded from the default location -- but the CLI
-            always passes the settings it already loaded, so the file
-            precedence honored there is preserved.
+        settings: Validated settings supplying analyzer/advisor
+            thresholds. When omitted, loaded from the default location
+            -- but the CLI always passes the settings it already
+            loaded, so the file precedence honored there is preserved.
 
     Returns:
-        An AnalyzeResult with parsed/analyzed counts and any findings.
+        An AnalyzeResult with parsed/analyzed counts, findings, and
+        index recommendations.
 
     Raises:
         ValidationError: If no source is given.
@@ -120,20 +128,23 @@ def analyze_service(
             queries_parsed=len(queries),
             queries_analyzed=0,
             analyzed_against_database=False,
-            findings=(),
         )
 
-    findings, analyzed = _analyze_against_database(
+    findings, analyzed, recommendations = _analyze_against_database(
         queries,
         db_url=db_url,
         confirm_mutations=confirm_mutations,
         context=AnalysisContext.from_settings(resolved_settings),
+        advisor=IndexAdvisor(
+            max_included_columns=resolved_settings.covering_index_max_included_columns
+        ),
     )
     return AnalyzeResult(
         queries_parsed=len(queries),
         queries_analyzed=analyzed,
         analyzed_against_database=True,
         findings=tuple(findings),
+        index_recommendations=tuple(recommendations),
     )
 
 
@@ -143,21 +154,22 @@ def _analyze_against_database(
     db_url: str,
     confirm_mutations: bool,
     context: AnalysisContext,
-) -> tuple[list[Finding], int]:
+    advisor: IndexAdvisor,
+) -> tuple[list[Finding], int, list[IndexRecommendation]]:
     """Run EXPLAIN ANALYZE + plan analysis for each query over one
-    connection, returning the findings and the count actually analyzed.
+    connection, then dedupe index recommendations across the workload.
 
-    One connection is reused across all queries (NFR-3.2.2). A single
-    query that can't be explained -- a blocked mutating statement, or an
-    EXPLAIN that errors -- is logged and skipped rather than aborting
-    the whole run, mirroring the parser's per-statement resilience. A
-    failure to open the connection is not caught here and propagates as
-    a DatabaseConnectionError.
+    Returns the flat findings list, the count actually analyzed, and the
+    deduplicated recommendations. One connection is reused across all
+    queries (NFR-3.2.2). A query that can't be explained -- a blocked
+    mutating statement, or an EXPLAIN that errors -- is logged and
+    skipped rather than aborting the whole run, mirroring the parser's
+    per-statement resilience. A failure to open the connection is not
+    caught here and propagates as a DatabaseConnectionError.
     """
     runner = ExplainRunner()
     analyzer = PlanAnalyzer()
-    findings: list[Finding] = []
-    analyzed = 0
+    per_query: list[tuple[Query, list[Finding]]] = []
 
     with DatabaseConnection(dsn=db_url) as connection:
         for query in queries:
@@ -181,10 +193,13 @@ def _analyze_against_database(
                 continue
 
             plan = parse_explain_json(raw_plan)
-            findings.extend(analyzer.analyze(plan, context))
-            analyzed += 1
+            per_query.append((query, analyzer.analyze(plan, context)))
 
-    return findings, analyzed
+    findings = [finding for _, query_findings in per_query for finding in query_findings]
+    recommendations = advisor.recommend_for_workload(
+        (query.text, query_findings) for query, query_findings in per_query
+    )
+    return findings, len(per_query), recommendations
 
 
 def audit_service(db_url: Optional[str]) -> None:

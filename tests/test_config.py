@@ -108,3 +108,17 @@ class TestSettingsImmutability:
         settings = Settings()
         with pytest.raises(Exception):
             settings.log_level = "DEBUG"  # type: ignore[misc]
+
+
+
+class TestCoveringIndexSetting:
+    def test_default(self) -> None:
+        assert Settings().covering_index_max_included_columns == 3
+
+    def test_rejects_negative(self) -> None:
+        with pytest.raises(Exception):
+            Settings(covering_index_max_included_columns=-1)
+
+    def test_env_override(self, monkeypatch: "pytest.MonkeyPatch") -> None:
+        monkeypatch.setenv("SQLCOACH_COVERING_INDEX_MAX_INCLUDED_COLUMNS", "5")
+        assert load_settings().covering_index_max_included_columns == 5

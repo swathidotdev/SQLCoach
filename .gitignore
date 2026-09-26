@@ -13,3 +13,4 @@ venv/
 .coverage
 htmlcov/
 fresh_check/
+queries.sql

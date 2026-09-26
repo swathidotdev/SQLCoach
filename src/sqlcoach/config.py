@@ -35,6 +35,7 @@ DEFAULT_SEQ_SCAN_ROW_THRESHOLD = 10_000
 DEFAULT_NESTED_LOOP_ROW_THRESHOLD = 10_000
 DEFAULT_CARDINALITY_MISESTIMATION_RATIO = 10.0
 DEFAULT_CARDINALITY_MIN_ROWS = 100
+DEFAULT_COVERING_INDEX_MAX_INCLUDED_COLUMNS = 3
 
 
 class Settings(BaseModel):
@@ -61,7 +62,13 @@ class Settings(BaseModel):
             reaches at least this value, suppressing noise from tiny
             absolute counts (e.g. 1 vs 12 rows). Set to 0 to disable the
             floor.
+        covering_index_max_included_columns: The largest INCLUDE list a
+            covering-index recommendation may carry. 0 disables covering
+            index suggestions (FR-3.5.3).
     """
+    covering_index_max_included_columns: int = Field(
+        default=DEFAULT_COVERING_INDEX_MAX_INCLUDED_COLUMNS, ge=0
+    )
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -106,7 +113,8 @@ def _read_env_overrides() -> dict[str, Any]:
 
     Recognized variables: SQLCOACH_LOG_LEVEL, SQLCOACH_JSON_LOGS,
     SQLCOACH_SEQ_SCAN_ROW_THRESHOLD, SQLCOACH_NESTED_LOOP_ROW_THRESHOLD,
-    SQLCOACH_CARDINALITY_MISESTIMATION_RATIO, SQLCOACH_CARDINALITY_MIN_ROWS.
+    SQLCOACH_CARDINALITY_MISESTIMATION_RATIO, SQLCOACH_CARDINALITY_MIN_ROWS,
+    SQLCOACH_COVERING_INDEX_MAX_INCLUDED_COLUMNS.
     """
     overrides: dict[str, Any] = {}
 
@@ -141,6 +149,12 @@ def _read_env_overrides() -> dict[str, Any]:
     )
     if raw_cardinality_min_rows is not None:
         overrides["cardinality_min_rows"] = raw_cardinality_min_rows
+
+    raw_covering_max = os.environ.get(
+        f"{_ENV_VAR_PREFIX}COVERING_INDEX_MAX_INCLUDED_COLUMNS"
+    )
+    if raw_covering_max is not None:
+        overrides["covering_index_max_included_columns"] = raw_covering_max
 
     return overrides
 

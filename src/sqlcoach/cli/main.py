@@ -135,15 +135,20 @@ def _render_analyze_result(result: AnalyzeResult) -> None:
 
     typer.echo(f"Analyzed {result.queries_analyzed} query(ies) against the database.")
 
-    if not result.findings:
+    if result.findings:
+        typer.echo(f"Found {len(result.findings)} issue(s):")
+        for finding in result.findings:
+            location = f" on {finding.relation_name}" if finding.relation_name else ""
+            typer.echo(f"  [{finding.severity.value.upper()}] {finding.code}{location}")
+            typer.echo(f"      {finding.summary}")
+    else:
         typer.echo("No execution-plan issues detected.")
-        return
 
-    typer.echo(f"Found {len(result.findings)} issue(s):")
-    for finding in result.findings:
-        location = f" on {finding.relation_name}" if finding.relation_name else ""
-        typer.echo(f"  [{finding.severity.value.upper()}] {finding.code}{location}")
-        typer.echo(f"      {finding.summary}")
+    if result.index_recommendations:
+        typer.echo(f"Recommended {len(result.index_recommendations)} index(es):")
+        for rec in result.index_recommendations:
+            typer.echo(f"  [{rec.confidence.value}] {rec.create_statement}")
+            typer.echo(f"      {rec.rationale}")
 
 
 @app.command()
