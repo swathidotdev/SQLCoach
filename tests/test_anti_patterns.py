@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlglot
 import pytest
 from sqlcoach.advisor.anti_patterns.leading_wildcard_like import LeadingWildcardLikeDetector
+from sqlcoach.advisor.anti_patterns.n_plus_one import NPlusOneDetector
 from sqlcoach.advisor.anti_patterns.order_by_random import OrderByRandomDetector
 from sqlcoach.advisor.anti_patterns.analyzer import AntiPatternAnalyzer, default_detectors
 from sqlcoach.advisor.anti_patterns.base import (
@@ -198,9 +199,73 @@ class TestCombinedAndNegativeFixture:
         ]
         assert AntiPatternAnalyzer().analyze([_q(s) for s in clean]) == []
 
-    def test_registry_has_all_three_detectors(self) -> None:
+    def test_registry_has_all_detectors(self) -> None:
         assert {d.name for d in default_detectors()} == {
             "select_star",
             "leading_wildcard_like",
             "order_by_random",
+            "n_plus_one",
         }
+
+
+class TestNPlusOne:
+    def test_flags_repeated_near_identical_queries(self) -> None:
+        detector = NPlusOneDetector(min_occurrences=5)
+        findings = detector.detect(
+            [_pq(f"SELECT * FROM orders WHERE user_id = {i}") for i in range(1, 6)]
+        )
+
+        assert len(findings) == 1
+        finding = findings[0]
+        assert finding.code == "N_PLUS_ONE"
+        assert finding.detector == "n_plus_one"
+        assert finding.severity is Severity.MEDIUM
+        assert finding.metrics["occurrences"] == 5
+        assert finding.relation_name == "orders"
+
+    def test_below_threshold_is_not_flagged(self) -> None:
+        detector = NPlusOneDetector(min_occurrences=5)
+        assert (
+            detector.detect(
+                [_pq(f"SELECT * FROM orders WHERE user_id = {i}") for i in range(1, 5)]
+            )
+            == []
+        )
+
+    def test_formatting_and_value_variance_still_clusters(self) -> None:
+        detector = NPlusOneDetector(min_occurrences=2)
+        findings = detector.detect(
+            [
+                _pq("SELECT * FROM orders WHERE user_id = 1"),
+                _pq("select   *  from orders  where user_id = 2"),
+            ]
+        )
+        assert len(findings) == 1
+
+    def test_structurally_different_queries_do_not_cluster(self) -> None:
+        detector = NPlusOneDetector(min_occurrences=2)
+        assert (
+            detector.detect(
+                [
+                    _pq("SELECT * FROM a WHERE x = 1"),
+                    _pq("SELECT * FROM b WHERE y = 2"),
+                    _pq("SELECT id FROM c"),
+                ]
+            )
+            == []
+        )
+
+    def test_configurable_threshold_via_registry(self) -> None:
+        analyzer = AntiPatternAnalyzer(
+            detectors=default_detectors(n_plus_one_min_occurrences=3)
+        )
+        codes = {
+            f.code
+            for f in analyzer.analyze(
+                [_q(f"SELECT name FROM users WHERE id = {i}") for i in range(3)]
+            )
+        }
+        assert "N_PLUS_ONE" in codes
+
+    def test_registry_includes_n_plus_one(self) -> None:
+        assert "n_plus_one" in {d.name for d in default_detectors()}

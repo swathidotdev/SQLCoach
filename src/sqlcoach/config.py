@@ -36,6 +36,7 @@ DEFAULT_NESTED_LOOP_ROW_THRESHOLD = 10_000
 DEFAULT_CARDINALITY_MISESTIMATION_RATIO = 10.0
 DEFAULT_CARDINALITY_MIN_ROWS = 100
 DEFAULT_COVERING_INDEX_MAX_INCLUDED_COLUMNS = 3
+DEFAULT_N_PLUS_ONE_MIN_OCCURRENCES = 5
 
 
 class Settings(BaseModel):
@@ -65,9 +66,17 @@ class Settings(BaseModel):
         covering_index_max_included_columns: The largest INCLUDE list a
             covering-index recommendation may carry. 0 disables covering
             index suggestions (FR-3.5.3).
+        n_plus_one_min_occurrences: The number of near-identical queries
+            (differing only in literal values) at or above which the
+            anti-pattern detector flags an N+1 pattern (FR-3.6.4). Must
+            be at least 2.
     """
     covering_index_max_included_columns: int = Field(
         default=DEFAULT_COVERING_INDEX_MAX_INCLUDED_COLUMNS, ge=0
+    )
+
+    n_plus_one_min_occurrences: int = Field(
+        default=DEFAULT_N_PLUS_ONE_MIN_OCCURRENCES, ge=2
     )
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -111,10 +120,11 @@ def _read_toml_file(path: Path) -> dict[str, Any]:
 def _read_env_overrides() -> dict[str, Any]:
     """Collect environment variable overrides for known Settings fields.
 
-    Recognized variables: SQLCOACH_LOG_LEVEL, SQLCOACH_JSON_LOGS,
+    Recognized variables: SQLCOACH_LOG_LEVEL, SQLCOACH_JSON_LOGS, SQLCOACH_N_PLUS_ONE_MIN_OCCURRENCES
     SQLCOACH_SEQ_SCAN_ROW_THRESHOLD, SQLCOACH_NESTED_LOOP_ROW_THRESHOLD,
     SQLCOACH_CARDINALITY_MISESTIMATION_RATIO, SQLCOACH_CARDINALITY_MIN_ROWS,
     SQLCOACH_COVERING_INDEX_MAX_INCLUDED_COLUMNS.
+
     """
     overrides: dict[str, Any] = {}
 
@@ -156,6 +166,9 @@ def _read_env_overrides() -> dict[str, Any]:
     if raw_covering_max is not None:
         overrides["covering_index_max_included_columns"] = raw_covering_max
 
+    raw_n_plus_one = os.environ.get(f"{_ENV_VAR_PREFIX}N_PLUS_ONE_MIN_OCCURRENCES")
+    if raw_n_plus_one is not None:
+        overrides["n_plus_one_min_occurrences"] = raw_n_plus_one
     return overrides
 
 

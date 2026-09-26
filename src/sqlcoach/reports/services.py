@@ -21,7 +21,10 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from sqlcoach.advisor.anti_patterns.analyzer import AntiPatternAnalyzer
+from sqlcoach.advisor.anti_patterns.analyzer import (
+    AntiPatternAnalyzer,
+    default_detectors as default_anti_pattern_detectors,
+)
 from sqlcoach.advisor.anti_patterns.base import AntiPatternFinding
 from sqlcoach.advisor.index_advisor import IndexAdvisor
 from sqlcoach.analyzer.base import AnalysisContext, Finding
@@ -129,8 +132,13 @@ def analyze_service(
     logger.info("Parsed %d queries from %s", len(queries), source)
 
     # Anti-pattern analysis is static -- it always runs, with or without
-    # a database.
-    anti_pattern_findings = AntiPatternAnalyzer().analyze(queries)
+    # a database. Its detectors are configured from settings (the N+1
+    # occurrence threshold).
+    anti_pattern_findings = AntiPatternAnalyzer(
+        detectors=default_anti_pattern_detectors(
+            n_plus_one_min_occurrences=resolved_settings.n_plus_one_min_occurrences
+        )
+    ).analyze(queries)
 
     if db_url is None:
         return AnalyzeResult(

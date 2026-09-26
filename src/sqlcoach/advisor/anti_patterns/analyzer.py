@@ -25,6 +25,10 @@ from sqlcoach.advisor.anti_patterns.base import (
 from sqlcoach.advisor.anti_patterns.leading_wildcard_like import (
     LeadingWildcardLikeDetector,
 )
+from sqlcoach.advisor.anti_patterns.n_plus_one import (
+    DEFAULT_MIN_OCCURRENCES,
+    NPlusOneDetector,
+)
 from sqlcoach.advisor.anti_patterns.order_by_random import OrderByRandomDetector
 from sqlcoach.advisor.anti_patterns.select_star import SelectStarDetector
 from sqlcoach.models.query import Query
@@ -33,16 +37,21 @@ from sqlcoach.parser.sql_ast_utils import DIALECT
 logger = logging.getLogger(__name__)
 
 
-def default_detectors() -> tuple[AntiPatternDetector, ...]:
+def default_detectors(
+    n_plus_one_min_occurrences: int = DEFAULT_MIN_OCCURRENCES,
+) -> tuple[AntiPatternDetector, ...]:
     """Return the default set of anti-pattern detectors.
 
-    This is the single registration point. The N+1 detector is added
-    here in the next increment; nothing else changes (OCP, US8.5).
+    This is the single registration point (OCP, US8.5). The N+1
+    detector's occurrence threshold is the one piece of per-run config
+    an anti-pattern detector needs, so it is passed here; production
+    supplies settings.n_plus_one_min_occurrences.
     """
     return (
         SelectStarDetector(),
         LeadingWildcardLikeDetector(),
         OrderByRandomDetector(),
+        NPlusOneDetector(min_occurrences=n_plus_one_min_occurrences),
     )
 
 
@@ -57,7 +66,8 @@ class AntiPatternAnalyzer:
         Args:
             detectors: The detectors to run. Defaults to
                 `default_detectors()`. Injecting a custom sequence keeps
-                the analyzer testable in isolation.
+                the analyzer testable in isolation and lets the service
+                pass detectors configured from Settings.
         """
         self._detectors: tuple[AntiPatternDetector, ...] = (
             tuple(detectors) if detectors is not None else default_detectors()
