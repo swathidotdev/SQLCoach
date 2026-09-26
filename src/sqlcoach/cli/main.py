@@ -126,17 +126,26 @@ def _render_analyze_result(result: AnalyzeResult) -> None:
     """Print an AnalyzeResult in human-readable form."""
     typer.echo(f"Parsed {result.queries_parsed} query(ies).")
 
+    # Anti-pattern findings are static and always available.
+    if result.anti_pattern_findings:
+        typer.echo(f"Found {len(result.anti_pattern_findings)} anti-pattern(s):")
+        for finding in result.anti_pattern_findings:
+            location = f" ({finding.source_location})" if finding.source_location else ""
+            typer.echo(f"  [{finding.severity.value.upper()}] {finding.code}{location}")
+            typer.echo(f"      {finding.summary}")
+
     if not result.analyzed_against_database:
+        if not result.anti_pattern_findings:
+            typer.echo("No anti-patterns detected in the parsed SQL.")
         typer.echo(
-            "No --db-url given, so no execution plans were analyzed. "
-            "Pass --db-url to run EXPLAIN ANALYZE and detect plan-level issues."
+            "Pass --db-url to also analyze execution plans and recommend indexes."
         )
         return
 
     typer.echo(f"Analyzed {result.queries_analyzed} query(ies) against the database.")
 
     if result.findings:
-        typer.echo(f"Found {len(result.findings)} issue(s):")
+        typer.echo(f"Found {len(result.findings)} execution-plan issue(s):")
         for finding in result.findings:
             location = f" on {finding.relation_name}" if finding.relation_name else ""
             typer.echo(f"  [{finding.severity.value.upper()}] {finding.code}{location}")
@@ -149,7 +158,6 @@ def _render_analyze_result(result: AnalyzeResult) -> None:
         for rec in result.index_recommendations:
             typer.echo(f"  [{rec.confidence.value}] {rec.create_statement}")
             typer.echo(f"      {rec.rationale}")
-
 
 @app.command()
 def analyze(

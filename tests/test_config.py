@@ -122,3 +122,17 @@ class TestCoveringIndexSetting:
     def test_env_override(self, monkeypatch: "pytest.MonkeyPatch") -> None:
         monkeypatch.setenv("SQLCOACH_COVERING_INDEX_MAX_INCLUDED_COLUMNS", "5")
         assert load_settings().covering_index_max_included_columns == 5
+
+
+
+class TestNPlusOneSetting:
+    def test_default(self) -> None:
+        assert Settings().n_plus_one_min_occurrences == 5
+
+    def test_rejects_below_two(self) -> None:
+        with pytest.raises(Exception):
+            Settings(n_plus_one_min_occurrences=1)
+
+    def test_env_override(self, monkeypatch: "pytest.MonkeyPatch") -> None:
+        monkeypatch.setenv("SQLCOACH_N_PLUS_ONE_MIN_OCCURRENCES", "10")
+        assert load_settings().n_plus_one_min_occurrences == 10

@@ -129,7 +129,8 @@ class TestAnalyzeCommand:
 
         assert result.exit_code == 0
         assert "Parsed 2 query(ies)." in result.output
-        assert "No --db-url given" in result.output
+        # assert "No --db-url given" in result.output
+        assert "Pass --db-url" in result.output
 
     def test_renders_findings_from_the_service(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -159,5 +160,5 @@ class TestAnalyzeCommand:
         result = runner.invoke(app, ["analyze", "whatever.sql", "--db-url", "postgresql://x/y"])
 
         assert result.exit_code == 0
-        assert "Found 1 issue(s):" in result.output
+        assert "Found 1 execution-plan issue(s):" in result.output
         assert "[HIGH] SEQ_SCAN_LARGE_TABLE on users" in result.output

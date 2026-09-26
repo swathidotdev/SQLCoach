@@ -194,3 +194,23 @@ class TestIndexRecommendationsInPipeline:
         source = _write_sql(tmp_path, "SELECT * FROM users WHERE email = 'a@b.com';")
         result = analyze_service(source, settings=Settings())
         assert result.index_recommendations == ()
+
+
+class TestStaticAntiPatternDetection:
+    def test_static_parse_surfaces_anti_patterns_without_a_database(
+        self, tmp_path: Path
+    ) -> None:
+        # No --db-url: still runs anti-pattern checks (they're static).
+        source = _write_sql(tmp_path, "SELECT * FROM users WHERE name LIKE '%x';")
+
+        result = analyze_service(source, settings=Settings())
+
+        assert result.analyzed_against_database is False
+        codes = {f.code for f in result.anti_pattern_findings}
+        assert "SELECT_STAR" in codes
+        assert "LEADING_WILDCARD_LIKE" in codes
+
+    def test_clean_query_has_no_anti_patterns(self, tmp_path: Path) -> None:
+        source = _write_sql(tmp_path, "SELECT id FROM users WHERE email = 'a@b.com';")
+        result = analyze_service(source, settings=Settings())
+        assert result.anti_pattern_findings == ()
