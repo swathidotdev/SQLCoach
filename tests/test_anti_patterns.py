@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import sqlglot
 import pytest
-
+from sqlcoach.advisor.anti_patterns.leading_wildcard_like import LeadingWildcardLikeDetector
+from sqlcoach.advisor.anti_patterns.order_by_random import OrderByRandomDetector
 from sqlcoach.advisor.anti_patterns.analyzer import AntiPatternAnalyzer, default_detectors
 from sqlcoach.advisor.anti_patterns.base import (
     AntiPatternDetector,
@@ -19,6 +20,8 @@ from sqlcoach.models.query import Query, QuerySource
 def _q(text: str, location: str = "q.sql:line 1") -> Query:
     return Query(text=text, source=QuerySource.SQL_FILE, source_location=location)
 
+def _pq(sql: str) -> ParsedQuery:
+    return ParsedQuery(_q(sql), sqlglot.parse_one(sql, read="postgres"))
 
 class TestSelectStar:
     def test_flags_bare_star_with_details(self) -> None:
@@ -112,3 +115,92 @@ class TestArchitecture:
 
         AntiPatternAnalyzer(detectors=[Spy(), Spy()]).analyze([_q("SELECT * FROM t")])
         assert seen[0] is seen[1]
+
+
+class TestLeadingWildcardLike:
+    def test_leading_wildcard_is_flagged(self) -> None:
+        findings = LeadingWildcardLikeDetector().detect(
+            [_pq("SELECT id FROM t WHERE name LIKE '%john'")]
+        )
+        assert len(findings) == 1
+        assert findings[0].code == "LEADING_WILDCARD_LIKE"
+        assert findings[0].detector == "leading_wildcard_like"
+        assert findings[0].severity is Severity.MEDIUM
+
+    def test_ilike_is_flagged(self) -> None:
+        findings = LeadingWildcardLikeDetector().detect(
+            [_pq("SELECT 1 FROM t WHERE a ILIKE '%x'")]
+        )
+        assert len(findings) == 1
+
+    def test_trailing_wildcard_is_not_flagged(self) -> None:
+        assert LeadingWildcardLikeDetector().detect(
+            [_pq("SELECT 1 FROM t WHERE a LIKE 'john%'")]
+        ) == []
+
+    def test_parameterized_like_is_not_flagged(self) -> None:
+        # The pattern is a bind parameter -- can't tell statically.
+        assert LeadingWildcardLikeDetector().detect(
+            [_pq("SELECT 1 FROM t WHERE a LIKE $1")]
+        ) == []
+
+    def test_two_columns_yield_two_findings(self) -> None:
+        findings = LeadingWildcardLikeDetector().detect(
+            [_pq("SELECT 1 FROM t WHERE a LIKE '%x' AND b LIKE '%y'")]
+        )
+        assert len(findings) == 2
+
+    def test_same_column_is_deduped(self) -> None:
+        findings = LeadingWildcardLikeDetector().detect(
+            [_pq("SELECT 1 FROM t WHERE a LIKE '%x' OR a LIKE '%y'")]
+        )
+        assert len(findings) == 1
+
+
+class TestOrderByRandom:
+    def test_random_is_flagged(self) -> None:
+        findings = OrderByRandomDetector().detect(
+            [_pq("SELECT * FROM t ORDER BY RANDOM()")]
+        )
+        assert len(findings) == 1
+        assert findings[0].code == "ORDER_BY_RANDOM"
+        assert findings[0].severity is Severity.MEDIUM
+
+    def test_lowercase_random_with_limit_is_flagged(self) -> None:
+        assert len(
+            OrderByRandomDetector().detect([_pq("SELECT * FROM t ORDER BY random() LIMIT 5")])
+        ) == 1
+
+    def test_ordinary_order_by_is_not_flagged(self) -> None:
+        assert OrderByRandomDetector().detect(
+            [_pq("SELECT * FROM t ORDER BY created_at DESC")]
+        ) == []
+
+
+class TestCombinedAndNegativeFixture:
+    def test_all_three_detectors_fire_on_one_query(self) -> None:
+        codes = {
+            f.code
+            for f in AntiPatternAnalyzer().analyze(
+                [_q("SELECT * FROM users WHERE name LIKE '%x' ORDER BY RANDOM()")]
+            )
+        }
+        assert codes == {"SELECT_STAR", "LEADING_WILDCARD_LIKE", "ORDER_BY_RANDOM"}
+
+    def test_clean_workload_produces_zero_findings(self) -> None:
+        # The DoD's negative-fixture bar: no false positives on clean SQL.
+        clean = [
+            "SELECT id, name FROM users WHERE email = 'a@b.com'",
+            "SELECT COUNT(*) FROM orders WHERE user_id = 5",
+            "SELECT id FROM t WHERE name LIKE 'john%'",
+            "SELECT id FROM t ORDER BY created_at DESC",
+            "SELECT o.id FROM orders o JOIN users u ON u.id = o.user_id WHERE o.status = 1",
+        ]
+        assert AntiPatternAnalyzer().analyze([_q(s) for s in clean]) == []
+
+    def test_registry_has_all_three_detectors(self) -> None:
+        assert {d.name for d in default_detectors()} == {
+            "select_star",
+            "leading_wildcard_like",
+            "order_by_random",
+        }

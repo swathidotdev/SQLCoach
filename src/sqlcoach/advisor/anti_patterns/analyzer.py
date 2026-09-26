@@ -22,6 +22,10 @@ from sqlcoach.advisor.anti_patterns.base import (
     AntiPatternFinding,
     ParsedQuery,
 )
+from sqlcoach.advisor.anti_patterns.leading_wildcard_like import (
+    LeadingWildcardLikeDetector,
+)
+from sqlcoach.advisor.anti_patterns.order_by_random import OrderByRandomDetector
 from sqlcoach.advisor.anti_patterns.select_star import SelectStarDetector
 from sqlcoach.models.query import Query
 from sqlcoach.parser.sql_ast_utils import DIALECT
@@ -32,11 +36,14 @@ logger = logging.getLogger(__name__)
 def default_detectors() -> tuple[AntiPatternDetector, ...]:
     """Return the default set of anti-pattern detectors.
 
-    This is the single registration point. Later increments (leading-
-    wildcard LIKE, ORDER BY RANDOM, N+1) add one entry each here;
-    nothing else changes (OCP, US8.5).
+    This is the single registration point. The N+1 detector is added
+    here in the next increment; nothing else changes (OCP, US8.5).
     """
-    return (SelectStarDetector(),)
+    return (
+        SelectStarDetector(),
+        LeadingWildcardLikeDetector(),
+        OrderByRandomDetector(),
+    )
 
 
 class AntiPatternAnalyzer:
