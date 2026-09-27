@@ -39,6 +39,7 @@ from sqlcoach.exceptions import (
     MutatingStatementError,
     ValidationError,
 )
+from sqlcoach.models.execution_plan import PlanSummary
 from sqlcoach.models.index_recommendation import IndexRecommendation
 from sqlcoach.models.query import Query
 from sqlcoach.models.recommendation import Recommendation
@@ -76,6 +77,9 @@ class AnalyzeResult(BaseModel):
             Empty for a static run.
         recommendations: The unified, deduplicated, ranked recommendation
             list built from all three sources -- the primary output.
+        plan_summaries: One PlanSummary per analyzed query (root node
+            type, estimated cost, execution time), used by the compare
+            command. Empty for a static-only run.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -87,6 +91,7 @@ class AnalyzeResult(BaseModel):
     findings: tuple[Finding, ...] = Field(default_factory=tuple)
     index_recommendations: tuple[IndexRecommendation, ...] = Field(default_factory=tuple)
     recommendations: tuple[Recommendation, ...] = Field(default_factory=tuple)
+    plan_summaries: tuple[PlanSummary, ...] = Field(default_factory=tuple)
 
 
 def analyze_service(

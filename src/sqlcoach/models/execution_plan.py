@@ -78,3 +78,25 @@ class ExecutionPlan(BaseModel):
     root: PlanNode
     planning_time_ms: Optional[float] = Field(default=None, ge=0)
     execution_time_ms: Optional[float] = Field(default=None, ge=0)
+
+class PlanSummary(BaseModel):
+    """A compact summary of one query's execution plan, for comparison.
+
+    Captures just what the `compare` command needs to diff a before/after
+    pair without carrying whole plan trees around: the root node type
+    (for plan-shape changes like Seq Scan -> Index Scan), the planner's
+    total estimated cost, and the measured execution time when ANALYZE
+    was used.
+
+    Attributes:
+        root_node_type: The plan's root node type (e.g. "Seq Scan").
+        estimated_cost: The planner's total cost for the whole plan.
+        execution_time_ms: Measured execution time in milliseconds, when
+            the plan was produced with ANALYZE. None otherwise.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    root_node_type: str
+    estimated_cost: float = Field(ge=0)
+    execution_time_ms: Optional[float] = Field(default=None, ge=0)
