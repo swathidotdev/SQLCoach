@@ -41,10 +41,7 @@ class TestStubCommands:
         assert result.exit_code == 0
         assert "not yet implemented" in result.output
 
-    def test_compare_prints_not_yet_implemented_and_exits_zero(self) -> None:
-        result = runner.invoke(app, ["compare"])
-        assert result.exit_code == 0
-        assert "not yet implemented" in result.output
+
 
 
 class TestJsonLogsFlag:
@@ -165,3 +162,19 @@ class TestAnalyzeCommand:
         assert "1 recommendation(s)" in result.output
         assert "CREATE INDEX idx_users_email ON users (email);" in result.output
         assert "[High confidence]" in result.output
+class TestCompareCommand:
+    def test_missing_sources_exit_validation(self) -> None:
+        result = runner.invoke(app, ["compare"])
+        assert result.exit_code == 3
+
+    def test_static_compare_renders_diff(self, tmp_path: Path) -> None:
+        before = tmp_path / "b.sql"
+        before.write_text("SELECT * FROM users WHERE email = 'a';")
+        after = tmp_path / "a.sql"
+        after.write_text("SELECT id FROM users WHERE email = 'a';")
+
+        result = runner.invoke(app, ["compare", str(before), str(after)])
+
+        assert result.exit_code == 0
+        assert "Anti-patterns:" in result.output
+        assert "Verdict:" in result.output

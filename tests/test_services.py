@@ -10,7 +10,6 @@ from sqlcoach.reports.services import (
     NotYetImplementedError,
     analyze_service,
     audit_service,
-    compare_service,
     report_service,
 )
 
@@ -28,9 +27,6 @@ class TestPlaceholderServicesRaiseNotYetImplemented:
         with pytest.raises(NotYetImplementedError, match="report"):
             report_service(None)
 
-    def test_compare_service(self) -> None:
-        with pytest.raises(NotYetImplementedError, match="compare"):
-            compare_service(None, None)
 
 
 class TestAnalyzeServiceIsImplemented:
