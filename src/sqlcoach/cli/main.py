@@ -28,12 +28,12 @@ from sqlcoach.exceptions import (
     ValidationError,
 )
 from sqlcoach.logging_config import configure_logging
+from sqlcoach.reports.comparison import ComparisonResult, compare_service
 from sqlcoach.reports.services import (
     AnalyzeResult,
     NotYetImplementedError,
     analyze_service,
     audit_service,
-    compare_service,
     report_service,
 )
 
@@ -152,6 +152,85 @@ def _render_analyze_result(result: AnalyzeResult) -> None:
             typer.echo(f"   Risks: {'; '.join(rec.risks)}")
         typer.echo("")
 
+def _render_diff_section(label: str, diff) -> None:  # type: ignore[no-untyped-def]
+    typer.echo(f"{label}:")
+    typer.echo(f"  Resolved ({len(diff.removed)}): {', '.join(diff.removed) or '(none)'}")
+    typer.echo(f"  New ({len(diff.added)}): {', '.join(diff.added) or '(none)'}")
+    typer.echo(
+        f"  Still present ({len(diff.unchanged)}): "
+        f"{', '.join(diff.unchanged) or '(none)'}"
+    )
+
+
+def _render_metric(
+    label: str,
+    before: Optional[float],
+    after: Optional[float],
+    *,
+    unit: str = "",
+    observed: bool = False,
+) -> None:
+    if before is None or after is None:
+        return
+    tag = "  (observed)" if observed else ""
+    if before > 0:
+        pct = (after - before) / before * 100
+        typer.echo(f"  {label}: {before:.2f}{unit} -> {after:.2f}{unit} ({pct:+.1f}%){tag}")
+    else:
+        typer.echo(f"  {label}: {before:.2f}{unit} -> {after:.2f}{unit}{tag}")
+
+
+def _render_comparison_result(result: ComparisonResult) -> None:
+    """Print a ComparisonResult as a before/after diff with a verdict."""
+    _render_diff_section("Anti-patterns", result.anti_patterns)
+
+    if result.compared_against_database:
+        _render_diff_section("Execution-plan issues", result.plan_findings)
+        _render_diff_section("Index recommendations", result.index_recommendations)
+        typer.echo("Execution plan:")
+        if result.plan_shape_before and result.plan_shape_after:
+            typer.echo(
+                f"  Plan shape: {result.plan_shape_before} -> {result.plan_shape_after}"
+            )
+        _render_metric(
+            "Estimated cost",
+            result.estimated_cost_before,
+            result.estimated_cost_after,
+        )
+        _render_metric(
+            "Execution time",
+            result.execution_time_ms_before,
+            result.execution_time_ms_after,
+            unit=" ms",
+            observed=True,
+        )
+    else:
+        typer.echo(
+            "(static compare; pass --db-url to also diff plan shape, cost, and time)"
+        )
+
+    resolved = (
+        len(result.anti_patterns.removed)
+        + len(result.plan_findings.removed)
+        + len(result.index_recommendations.removed)
+    )
+    introduced = (
+        len(result.anti_patterns.added)
+        + len(result.plan_findings.added)
+        + len(result.index_recommendations.added)
+    )
+    if resolved and not introduced:
+        verdict = "Improvement"
+    elif introduced and not resolved:
+        verdict = "Regression"
+    elif introduced and resolved:
+        verdict = "Mixed"
+    else:
+        verdict = "No change"
+    typer.echo(
+        f"\nVerdict: {verdict} -- {resolved} issue(s) resolved, {introduced} introduced."
+    )
+
 @app.command()
 def analyze(
     ctx: typer.Context,
@@ -212,16 +291,36 @@ def report(
 
 @app.command()
 def compare(
+    ctx: typer.Context,
     before: Optional[Path] = typer.Argument(
-        None, help="Query or file representing the 'before' version. (Not yet implemented.)"
+        None, help="The 'before' .sql file (the original version)."
     ),
     after: Optional[Path] = typer.Argument(
-        None, help="Query or file representing the 'after' version. (Not yet implemented.)"
+        None, help="The 'after' .sql file (the optimized version)."
+    ),
+    db_url: Optional[str] = typer.Option(
+        None,
+        "--db-url",
+        help="PostgreSQL connection string. When given, also diffs plan "
+        "shape, estimated cost, and execution time.",
+    ),
+    confirm_mutations: bool = typer.Option(
+        False,
+        "--confirm-mutations",
+        help="Allow EXPLAIN ANALYZE to run statements that modify data or take locks.",
     ),
 ) -> None:
     """Compare performance characteristics between two versions of a query."""
-    _run_service(lambda: compare_service(before, after))
+    settings = _settings_from(ctx)
 
+    def run() -> None:
+        result = compare_service(
+            before,
+            after,
+            db_url=db_url,
+            confirm_mutations=confirm_mutations,
+            settings=settings,
+        )
+        _render_comparison_result(result)
 
-if __name__ == "__main__":
-    app()
+    _run_service(run)

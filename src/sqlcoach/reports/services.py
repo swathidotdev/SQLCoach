@@ -144,10 +144,11 @@ def analyze_service(
     # Plan analysis + index advice only with a live database.
     plan_findings: Sequence[Finding] = ()
     index_recommendations: Sequence[IndexRecommendation] = ()
+    plan_summaries: Sequence[PlanSummary] = ()
     analyzed = 0
     analyzed_against_database = False
     if db_url is not None:
-        plan_findings, analyzed, index_recommendations = _analyze_against_database(
+        plan_findings, analyzed, index_recommendations, plan_summaries = _analyze_against_database(
             queries,
             db_url=db_url,
             confirm_mutations=confirm_mutations,
@@ -172,6 +173,7 @@ def analyze_service(
         findings=tuple(plan_findings),
         index_recommendations=tuple(index_recommendations),
         recommendations=tuple(recommendations),
+        plan_summaries=tuple(plan_summaries),
     )
 
 
@@ -182,21 +184,21 @@ def _analyze_against_database(
     confirm_mutations: bool,
     context: AnalysisContext,
     advisor: IndexAdvisor,
-) -> tuple[list[Finding], int, list[IndexRecommendation]]:
+) -> tuple[list[Finding], int, list[IndexRecommendation], list[PlanSummary]]:
     """Run EXPLAIN ANALYZE + plan analysis for each query over one
-    connection, then dedupe index recommendations across the workload.
+    connection, dedupe index recommendations, and summarize each plan.
 
-    Returns the flat findings list, the count actually analyzed, and the
-    deduplicated recommendations. One connection is reused across all
-    queries (NFR-3.2.2). A query that can't be explained -- a blocked
-    mutating statement, or an EXPLAIN that errors -- is logged and
-    skipped rather than aborting the whole run, mirroring the parser's
-    per-statement resilience. A failure to open the connection is not
-    caught here and propagates as a DatabaseConnectionError.
+    Returns the flat findings list, the count actually analyzed, the
+    deduplicated recommendations, and one PlanSummary per analyzed query.
+    One connection is reused across all queries (NFR-3.2.2). A query that
+    can't be explained -- a blocked mutating statement, or an EXPLAIN that
+    errors -- is logged and skipped rather than aborting the whole run. A
+    failure to open the connection propagates as a DatabaseConnectionError.
     """
     runner = ExplainRunner()
     analyzer = PlanAnalyzer()
     per_query: list[tuple[Query, list[Finding]]] = []
+    plan_summaries: list[PlanSummary] = []
 
     with DatabaseConnection(dsn=db_url) as connection:
         for query in queries:
@@ -221,12 +223,19 @@ def _analyze_against_database(
 
             plan = parse_explain_json(raw_plan)
             per_query.append((query, analyzer.analyze(plan, context)))
+            plan_summaries.append(
+                PlanSummary(
+                    root_node_type=plan.root.node_type,
+                    estimated_cost=plan.root.estimated_cost,
+                    execution_time_ms=plan.execution_time_ms,
+                )
+            )
 
     findings = [finding for _, query_findings in per_query for finding in query_findings]
     recommendations = advisor.recommend_for_workload(
         (query.text, query_findings) for query, query_findings in per_query
     )
-    return findings, len(per_query), recommendations
+    return findings, len(per_query), recommendations, plan_summaries
 
 
 def audit_service(db_url: Optional[str]) -> None:
@@ -245,9 +254,3 @@ def report_service(output: Optional[Path]) -> None:
     raise NotYetImplementedError("report")
 
 
-def compare_service(before: Optional[Path], after: Optional[Path]) -> None:
-    """Placeholder for the `compare` command's business logic.
-
-    Real implementation lands in Sprint 10.
-    """
-    raise NotYetImplementedError("compare")

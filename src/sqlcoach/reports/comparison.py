@@ -17,11 +17,17 @@ only when each side is a single query, where "the plan" is unambiguous.
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from sqlcoach.reports.services import AnalyzeResult
+from sqlcoach.config import Settings, load_settings
+from sqlcoach.exceptions import ValidationError
+from sqlcoach.reports.services import AnalyzeResult, analyze_service
+
+logger = logging.getLogger(__name__)
 
 
 class SetDiff(BaseModel):
@@ -152,3 +158,45 @@ def compare_results(before: AnalyzeResult, after: AnalyzeResult) -> ComparisonRe
         )
 
     return ComparisonResult(**result_kwargs)
+
+
+def compare_service(
+    before: Optional[Path],
+    after: Optional[Path],
+    *,
+    db_url: Optional[str] = None,
+    confirm_mutations: bool = False,
+    settings: Optional[Settings] = None,
+) -> ComparisonResult:
+    """Analyze two SQL files and diff them (FR-4.1).
+
+    Runs the analyze pipeline on `before` and `after` with identical
+    settings, then diffs the two results. When `db_url` is given, both
+    runs also perform live plan analysis, enabling the cost/time/shape
+    diff; otherwise the comparison is static.
+
+    Raises:
+        ValidationError: If either source is missing.
+        DatabaseConnectionError: If the database cannot be connected to.
+    """
+    if before is None or after is None:
+        raise ValidationError(
+            "compare requires two source files: a before and an after",
+            details={"before": before is not None, "after": after is not None},
+        )
+
+    resolved_settings = settings if settings is not None else load_settings()
+
+    before_result = analyze_service(
+        before,
+        db_url=db_url,
+        confirm_mutations=confirm_mutations,
+        settings=resolved_settings,
+    )
+    after_result = analyze_service(
+        after,
+        db_url=db_url,
+        confirm_mutations=confirm_mutations,
+        settings=resolved_settings,
+    )
+    return compare_results(before_result, after_result)

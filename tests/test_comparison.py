@@ -1,13 +1,20 @@
-"""Unit tests for the compare diff logic (Sprint 10)."""
+"""Unit tests for the compare diff logic and service (Sprint 10)."""
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
+import pytest
+
 from sqlcoach.advisor.anti_patterns.base import AntiPatternFinding
 from sqlcoach.analyzer.base import Finding, Severity
+from sqlcoach.config import Settings
+from sqlcoach.exceptions import ValidationError
 from sqlcoach.models.execution_plan import PlanSummary
 from sqlcoach.models.index_recommendation import IndexKind, IndexRecommendation
 from sqlcoach.models.recommendation import ConfidenceLevel
-from sqlcoach.reports.comparison import compare_results
+from sqlcoach.reports import services
+from sqlcoach.reports.comparison import compare_results, compare_service
 from sqlcoach.reports.services import AnalyzeResult
 
 
@@ -154,7 +161,7 @@ class TestPlanDiff:
         )
 
         result = compare_results(before, after)
-        assert result.plan_shape_before is None  # 2 queries -> shape ambiguous
+        assert result.plan_shape_before is None
         assert result.estimated_cost_before == 1500.0
         assert result.estimated_cost_after == 510.0
         assert result.execution_time_ms_before == 150.0
@@ -188,3 +195,72 @@ class TestDeterminism:
 
         assert first.anti_patterns.removed == second.anti_patterns.removed
         assert list(first.anti_patterns.removed) == sorted(first.anti_patterns.removed)
+
+
+class TestCompareServiceEndToEnd:
+    def _write(self, tmp_path, name: str, sql: str):
+        path = tmp_path / name
+        path.write_text(sql, encoding="utf-8")
+        return path
+
+    def test_static_compare_detects_resolved_anti_pattern(self, tmp_path) -> None:
+        before = self._write(tmp_path, "before.sql", "SELECT * FROM users WHERE email = 'a';")
+        after = self._write(tmp_path, "after.sql", "SELECT id, email FROM users WHERE email = 'a';")
+
+        result = compare_service(before, after, settings=Settings())
+
+        assert result.compared_against_database is False
+        assert result.anti_patterns.removed == ("SELECT_STAR on users",)
+
+    def test_missing_source_raises_validation_error(self, tmp_path) -> None:
+        after = self._write(tmp_path, "after.sql", "SELECT id FROM t;")
+        with pytest.raises(ValidationError):
+            compare_service(None, after, settings=Settings())
+
+    def test_live_compare_shows_plan_improvement(self, tmp_path, monkeypatch) -> None:
+        before = self._write(tmp_path, "before.sql", "SELECT id FROM users WHERE email = 'a';")
+        after = self._write(tmp_path, "after.sql", "SELECT id FROM users WHERE email = 'a';")
+
+        seq_plan = [
+            {
+                "Plan": {
+                    "Node Type": "Seq Scan",
+                    "Relation Name": "users",
+                    "Total Cost": 5000.0,
+                    "Plan Rows": 500000,
+                    "Actual Rows": 500000,
+                },
+                "Execution Time": 620.0,
+            }
+        ]
+        idx_plan = [
+            {
+                "Plan": {
+                    "Node Type": "Index Scan",
+                    "Relation Name": "users",
+                    "Total Cost": 8.0,
+                    "Plan Rows": 1,
+                    "Actual Rows": 1,
+                },
+                "Execution Time": 15.0,
+            }
+        ]
+
+        connection = MagicMock()
+        db_cm = MagicMock()
+        db_cm.__enter__.return_value = connection
+        db_cm.__exit__.return_value = False
+        monkeypatch.setattr(services, "DatabaseConnection", lambda **_: db_cm)
+
+        runner = MagicMock()
+        runner.explain.side_effect = [seq_plan, idx_plan]
+        monkeypatch.setattr(services, "ExplainRunner", lambda: runner)
+
+        result = compare_service(before, after, db_url="postgresql://x/y", settings=Settings())
+
+        assert result.compared_against_database is True
+        assert result.plan_shape_before == "Seq Scan"
+        assert result.plan_shape_after == "Index Scan"
+        assert result.estimated_cost_before == 5000.0
+        assert result.estimated_cost_after == 8.0
+        assert result.plan_findings.removed == ("SEQ_SCAN_LARGE_TABLE on users",)
