@@ -214,3 +214,54 @@ class TestStaticAntiPatternDetection:
         source = _write_sql(tmp_path, "SELECT id FROM users WHERE email = 'a@b.com';")
         result = analyze_service(source, settings=Settings())
         assert result.anti_pattern_findings == ()
+
+
+class TestEndToEnd:
+    def test_static_run_produces_ranked_explained_recommendations(
+        self, tmp_path: Path
+    ) -> None:
+        # file -> parse -> anti-pattern analysis -> recommend, no database.
+        source = _write_sql(
+            tmp_path,
+            "SELECT * FROM users WHERE name LIKE '%x';\n"
+            "SELECT id FROM t ORDER BY RANDOM();\n",
+        )
+
+        result = analyze_service(source, settings=Settings())
+
+        assert result.analyzed_against_database is False
+        assert len(result.recommendations) >= 2
+        # Every recommendation is fully explained (all narrative fields set).
+        for rec in result.recommendations:
+            assert rec.problem and rec.root_cause and rec.technical_explanation
+            assert rec.recommended_solution and rec.expected_impact
+
+    def test_full_pipeline_ranks_index_rec_first(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # file -> parse -> EXPLAIN (mocked) -> plan analysis -> index advice
+        # -> unified ranking. The missing-index recommendation leads.
+        source = _write_sql(tmp_path, "SELECT * FROM users WHERE email = 'a@b.com';")
+
+        connection = MagicMock()
+        db_cm = MagicMock()
+        db_cm.__enter__.return_value = connection
+        db_cm.__exit__.return_value = False
+        monkeypatch.setattr(services, "DatabaseConnection", lambda **_: db_cm)
+
+        runner = MagicMock()
+        runner.explain.return_value = _LARGE_SEQ_SCAN_PLAN
+        monkeypatch.setattr(services, "ExplainRunner", lambda: runner)
+
+        result = analyze_service(
+            source, db_url="postgresql://localhost/db", settings=Settings()
+        )
+
+        assert result.recommendations
+        top = result.recommendations[0]
+        assert top.sql_example == "CREATE INDEX idx_users_email ON users (email);"
+        # The seq-scan finding was folded into the index rec, not double-reported.
+        assert not any(
+            "Sequential scan" in r.problem and r.sql_example is None
+            for r in result.recommendations
+        )

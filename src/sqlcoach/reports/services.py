@@ -7,15 +7,16 @@ and returns plain data. Business logic never lives in the CLI
 (NFR-X.2, FR-2.10).
 
 `audit`, `report`, and `compare` remain placeholders until their
-sprints (11, 9, and 10 respectively). `analyze` parses a `.sql` file
-into queries, always runs the static anti-pattern checks, and -- when a
-database URL is supplied -- additionally runs each query through EXPLAIN
-ANALYZE, the plan analyzer, and the index advisor.
+sprints (11, 9-HTML, and 10 respectively). `analyze` parses a `.sql`
+file, always runs the static anti-pattern checks, optionally runs the
+live-database plan analysis + index advisor, and unifies every source
+into one ranked recommendation list via the recommendation engine.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +28,7 @@ from sqlcoach.advisor.anti_patterns.analyzer import (
 )
 from sqlcoach.advisor.anti_patterns.base import AntiPatternFinding
 from sqlcoach.advisor.index_advisor import IndexAdvisor
+from sqlcoach.advisor.recommendation_engine import RecommendationEngine
 from sqlcoach.analyzer.base import AnalysisContext, Finding
 from sqlcoach.analyzer.plan_analyzer import PlanAnalyzer
 from sqlcoach.config import Settings, load_settings
@@ -39,6 +41,7 @@ from sqlcoach.exceptions import (
 )
 from sqlcoach.models.index_recommendation import IndexRecommendation
 from sqlcoach.models.query import Query
+from sqlcoach.models.recommendation import Recommendation
 from sqlcoach.parser.plan_json_parser import parse_explain_json
 from sqlcoach.parser.sql_file_parser import SqlFileParser
 
@@ -60,21 +63,19 @@ class AnalyzeResult(BaseModel):
     """The outcome of an `analyze` run, for the CLI to render.
 
     Attributes:
-        queries_parsed: Number of statements successfully parsed from
-            the source file.
-        queries_analyzed: Number of queries run through EXPLAIN ANALYZE
-            and inspected. Zero when no database URL was given (static
-            analysis only), and may be less than `queries_parsed` when
-            some queries were skipped (e.g. mutating statements without
-            confirmation).
-        analyzed_against_database: Whether a live database was used for
-            plan-level analysis.
-        anti_pattern_findings: Static anti-pattern findings across the
-            workload. Always populated regardless of database access.
-        findings: Execution-plan findings, across every analyzed query.
-            Empty for a static-only run.
-        index_recommendations: Deduplicated index recommendations across
-            the workload. Empty for a static-only run.
+        queries_parsed: Number of statements successfully parsed.
+        queries_analyzed: Number of queries run through EXPLAIN ANALYZE.
+            Zero for a static-only run; may be less than queries_parsed
+            when some were skipped (e.g. blocked mutating statements).
+        analyzed_against_database: Whether a live database was used.
+        anti_pattern_findings: Raw static anti-pattern findings. Always
+            populated. Retained for inspection; the unified narrative is
+            in `recommendations`.
+        findings: Raw execution-plan findings. Empty for a static run.
+        index_recommendations: Raw, deduped index recommendations.
+            Empty for a static run.
+        recommendations: The unified, deduplicated, ranked recommendation
+            list built from all three sources -- the primary output.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -85,6 +86,7 @@ class AnalyzeResult(BaseModel):
     anti_pattern_findings: tuple[AntiPatternFinding, ...] = Field(default_factory=tuple)
     findings: tuple[Finding, ...] = Field(default_factory=tuple)
     index_recommendations: tuple[IndexRecommendation, ...] = Field(default_factory=tuple)
+    recommendations: tuple[Recommendation, ...] = Field(default_factory=tuple)
 
 
 def analyze_service(
@@ -94,27 +96,23 @@ def analyze_service(
     confirm_mutations: bool = False,
     settings: Optional[Settings] = None,
 ) -> AnalyzeResult:
-    """Parse a SQL file, run static anti-pattern checks, and -- if a
-    database URL is given -- analyze each query's execution plan and
-    recommend indexes.
+    """Parse a SQL file, detect issues from every available source, and
+    return one ranked recommendation list.
+
+    Anti-pattern analysis is static and always runs. Plan analysis and
+    index advice run only when `db_url` is given. All findings are then
+    unified and ranked by the recommendation engine.
 
     Args:
         source: Path to a `.sql` file to analyze.
-        db_url: Optional PostgreSQL connection string. When provided,
-            each parsed query is run through EXPLAIN ANALYZE and its
-            plan inspected. Anti-pattern analysis runs either way, since
-            it needs no database.
-        confirm_mutations: Passed through to the EXPLAIN runner; must be
-            True to let EXPLAIN ANALYZE execute statements that modify
-            data or take locks (FR-3.2.2).
-        settings: Validated settings supplying analyzer/advisor
-            thresholds. When omitted, loaded from the default location
-            -- but the CLI always passes the settings it already
-            loaded, so the file precedence honored there is preserved.
+        db_url: Optional PostgreSQL connection string.
+        confirm_mutations: Must be True to let EXPLAIN ANALYZE execute
+            statements that modify data or take locks (FR-3.2.2).
+        settings: Validated settings; loaded from the default location
+            when omitted (the CLI passes its already-loaded settings).
 
     Returns:
-        An AnalyzeResult with parsed/analyzed counts, anti-pattern
-        findings, plan findings, and index recommendations.
+        An AnalyzeResult, including the ranked `recommendations`.
 
     Raises:
         ValidationError: If no source is given.
@@ -131,39 +129,44 @@ def analyze_service(
     queries = SqlFileParser().parse(source)
     logger.info("Parsed %d queries from %s", len(queries), source)
 
-    # Anti-pattern analysis is static -- it always runs, with or without
-    # a database. Its detectors are configured from settings (the N+1
-    # occurrence threshold).
+    # Static anti-pattern analysis always runs.
     anti_pattern_findings = AntiPatternAnalyzer(
         detectors=default_anti_pattern_detectors(
             n_plus_one_min_occurrences=resolved_settings.n_plus_one_min_occurrences
         )
     ).analyze(queries)
 
-    if db_url is None:
-        return AnalyzeResult(
-            queries_parsed=len(queries),
-            queries_analyzed=0,
-            analyzed_against_database=False,
-            anti_pattern_findings=tuple(anti_pattern_findings),
+    # Plan analysis + index advice only with a live database.
+    plan_findings: Sequence[Finding] = ()
+    index_recommendations: Sequence[IndexRecommendation] = ()
+    analyzed = 0
+    analyzed_against_database = False
+    if db_url is not None:
+        plan_findings, analyzed, index_recommendations = _analyze_against_database(
+            queries,
+            db_url=db_url,
+            confirm_mutations=confirm_mutations,
+            context=AnalysisContext.from_settings(resolved_settings),
+            advisor=IndexAdvisor(
+                max_included_columns=resolved_settings.covering_index_max_included_columns
+            ),
         )
+        analyzed_against_database = True
 
-    findings, analyzed, recommendations = _analyze_against_database(
-        queries,
-        db_url=db_url,
-        confirm_mutations=confirm_mutations,
-        context=AnalysisContext.from_settings(resolved_settings),
-        advisor=IndexAdvisor(
-            max_included_columns=resolved_settings.covering_index_max_included_columns
-        ),
+    recommendations = RecommendationEngine().generate(
+        plan_findings=plan_findings,
+        index_recommendations=index_recommendations,
+        anti_pattern_findings=anti_pattern_findings,
     )
+
     return AnalyzeResult(
         queries_parsed=len(queries),
         queries_analyzed=analyzed,
-        analyzed_against_database=True,
+        analyzed_against_database=analyzed_against_database,
         anti_pattern_findings=tuple(anti_pattern_findings),
-        findings=tuple(findings),
-        index_recommendations=tuple(recommendations),
+        findings=tuple(plan_findings),
+        index_recommendations=tuple(index_recommendations),
+        recommendations=tuple(recommendations),
     )
 
 
@@ -232,8 +235,7 @@ def audit_service(db_url: Optional[str]) -> None:
 def report_service(output: Optional[Path]) -> None:
     """Placeholder for the `report` command's business logic.
 
-    Real implementation lands alongside the recommendation engine
-    (Sprint 9) and HTML report generation.
+    Real implementation lands alongside HTML report generation.
     """
     raise NotYetImplementedError("report")
 

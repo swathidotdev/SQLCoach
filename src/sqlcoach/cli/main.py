@@ -123,41 +123,34 @@ def _run_service(service_call: Callable[[], None]) -> None:
 
 
 def _render_analyze_result(result: AnalyzeResult) -> None:
-    """Print an AnalyzeResult in human-readable form."""
+    """Print an AnalyzeResult as a ranked recommendation report."""
     typer.echo(f"Parsed {result.queries_parsed} query(ies).")
-
-    # Anti-pattern findings are static and always available.
-    if result.anti_pattern_findings:
-        typer.echo(f"Found {len(result.anti_pattern_findings)} anti-pattern(s):")
-        for finding in result.anti_pattern_findings:
-            location = f" ({finding.source_location})" if finding.source_location else ""
-            typer.echo(f"  [{finding.severity.value.upper()}] {finding.code}{location}")
-            typer.echo(f"      {finding.summary}")
-
-    if not result.analyzed_against_database:
-        if not result.anti_pattern_findings:
-            typer.echo("No anti-patterns detected in the parsed SQL.")
+    if result.analyzed_against_database:
+        typer.echo(f"Analyzed {result.queries_analyzed} query(ies) against the database.")
+    else:
         typer.echo(
-            "Pass --db-url to also analyze execution plans and recommend indexes."
+            "Ran static checks only. Pass --db-url to also analyze execution plans "
+            "and recommend indexes."
         )
+
+    if not result.recommendations:
+        typer.echo("No recommendations -- nothing was flagged.")
         return
 
-    typer.echo(f"Analyzed {result.queries_analyzed} query(ies) against the database.")
-
-    if result.findings:
-        typer.echo(f"Found {len(result.findings)} execution-plan issue(s):")
-        for finding in result.findings:
-            location = f" on {finding.relation_name}" if finding.relation_name else ""
-            typer.echo(f"  [{finding.severity.value.upper()}] {finding.code}{location}")
-            typer.echo(f"      {finding.summary}")
-    else:
-        typer.echo("No execution-plan issues detected.")
-
-    if result.index_recommendations:
-        typer.echo(f"Recommended {len(result.index_recommendations)} index(es):")
-        for rec in result.index_recommendations:
-            typer.echo(f"  [{rec.confidence.value}] {rec.create_statement}")
-            typer.echo(f"      {rec.rationale}")
+    typer.echo(
+        f"\n{len(result.recommendations)} recommendation(s), highest impact first:\n"
+    )
+    for index, rec in enumerate(result.recommendations, start=1):
+        typer.echo(f"{index}. [{rec.confidence.value} confidence] {rec.problem}")
+        typer.echo(f"   Root cause: {rec.root_cause}")
+        typer.echo(f"   Why: {rec.technical_explanation}")
+        typer.echo(f"   Fix: {rec.recommended_solution}")
+        if rec.sql_example:
+            typer.echo(f"   SQL: {rec.sql_example}")
+        typer.echo(f"   Impact: {rec.expected_impact}")
+        if rec.risks:
+            typer.echo(f"   Risks: {'; '.join(rec.risks)}")
+        typer.echo("")
 
 @app.command()
 def analyze(
