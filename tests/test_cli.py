@@ -132,10 +132,10 @@ class TestAnalyzeCommand:
         # assert "No --db-url given" in result.output
         assert "Pass --db-url" in result.output
 
-    def test_renders_findings_from_the_service(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_renders_recommendations_from_the_service(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sqlcoach.analyzer.base import Finding, Severity
+        from sqlcoach.models.recommendation import ConfidenceLevel, Recommendation
         from sqlcoach.reports.services import AnalyzeResult
 
         def fake_service(*_args: object, **_kwargs: object) -> AnalyzeResult:
@@ -143,22 +143,25 @@ class TestAnalyzeCommand:
                 queries_parsed=1,
                 queries_analyzed=1,
                 analyzed_against_database=True,
-                findings=(
-                    Finding(
-                        code="SEQ_SCAN_LARGE_TABLE",
-                        detector="sequential_scan",
-                        severity=Severity.HIGH,
-                        summary="big scan on users",
-                        node_type="Seq Scan",
-                        relation_name="users",
+                recommendations=(
+                    Recommendation(
+                        problem="Sequential scan on users",
+                        root_cause="No index on users.email",
+                        technical_explanation="A seq scan reads every row.",
+                        recommended_solution="Create the index below on users (email).",
+                        sql_example="CREATE INDEX idx_users_email ON users (email);",
+                        expected_impact="Index lookup instead of full scan.",
+                        confidence=ConfidenceLevel.HIGH,
+                        risks=("Adds write overhead.",),
                     ),
                 ),
             )
 
         monkeypatch.setattr("sqlcoach.cli.main.analyze_service", fake_service)
 
-        result = runner.invoke(app, ["analyze", "whatever.sql", "--db-url", "postgresql://x/y"])
+        result = runner.invoke(app, ["analyze", "x.sql", "--db-url", "postgresql://x/y"])
 
         assert result.exit_code == 0
-        assert "Found 1 execution-plan issue(s):" in result.output
-        assert "[HIGH] SEQ_SCAN_LARGE_TABLE on users" in result.output
+        assert "1 recommendation(s)" in result.output
+        assert "CREATE INDEX idx_users_email ON users (email);" in result.output
+        assert "[High confidence]" in result.output

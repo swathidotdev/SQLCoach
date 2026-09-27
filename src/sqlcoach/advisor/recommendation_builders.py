@@ -222,6 +222,11 @@ def from_index_recommendation(rec: IndexRecommendation) -> Recommendation:
     """
     columns = ", ".join(rec.columns)
     covering = rec.kind is IndexKind.COVERING
+    kind_label = {
+        IndexKind.SINGLE_COLUMN: "single-column",
+        IndexKind.COMPOSITE: "composite",
+        IndexKind.COVERING: "covering",
+    }[rec.kind]
 
     if covering:
         included = ", ".join(rec.included_columns)
@@ -253,7 +258,9 @@ def from_index_recommendation(rec: IndexRecommendation) -> Recommendation:
         ),
         root_cause=f"{rec.table} has no index PostgreSQL can use for these column(s).",
         technical_explanation=technical_explanation,
-        recommended_solution=rec.rationale,
+        recommended_solution=(
+            f"Create the {kind_label} index below on {rec.table} ({columns})."
+        ),
         sql_example=rec.create_statement,
         expected_impact=expected_impact,
         confidence=rec.confidence,
