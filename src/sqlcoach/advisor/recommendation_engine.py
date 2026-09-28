@@ -34,6 +34,7 @@ from typing import NamedTuple
 from sqlcoach.advisor.anti_patterns.base import AntiPatternFinding
 from sqlcoach.advisor.recommendation_builders import (
     from_anti_pattern,
+    from_index_hygiene,
     from_index_recommendation,
     from_plan_finding,
 )
@@ -41,6 +42,7 @@ from sqlcoach.analyzer.base import Finding, Severity
 from sqlcoach.models.index_recommendation import IndexRecommendation
 from sqlcoach.models.recommendation import ConfidenceLevel, Recommendation
 from sqlcoach.advisor.impact_estimator import estimate_index_impact
+from sqlcoach.models.index_hygiene import IndexHygieneFinding
 
 _SEQ_SCAN_CODE = "SEQ_SCAN_LARGE_TABLE"
 
@@ -93,6 +95,7 @@ class RecommendationEngine:
         plan_findings: Sequence[Finding] = (),
         index_recommendations: Sequence[IndexRecommendation] = (),
         anti_pattern_findings: Sequence[AntiPatternFinding] = (),
+        index_hygiene_findings: Sequence[IndexHygieneFinding] = (),
     ) -> list[Recommendation]:
         """Produce one ranked, deduplicated recommendation list."""
         ranked: list[_Ranked] = []
@@ -171,6 +174,20 @@ class RecommendationEngine:
                 _Ranked(
                     impact=_SEVERITY_TIER[representative.severity],
                     occurrences=len(group),
+                    confidence=_CONFIDENCE_TIER[recommendation.confidence],
+                    order=order,
+                    recommendation=recommendation,
+                )
+            )
+            order += 1
+        # 4. Index-hygiene findings (drop redundant/unused indexes). Each is
+        #    per-index and already unique.
+        for hygiene in index_hygiene_findings:
+            recommendation = from_index_hygiene(hygiene)
+            ranked.append(
+                _Ranked(
+                    impact=_SEVERITY_TIER[hygiene.severity],
+                    occurrences=1,
                     confidence=_CONFIDENCE_TIER[recommendation.confidence],
                     order=order,
                     recommendation=recommendation,
