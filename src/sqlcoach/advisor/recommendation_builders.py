@@ -25,6 +25,7 @@ from sqlcoach.advisor.confidence import (
 from sqlcoach.analyzer.base import Finding
 from sqlcoach.models.index_recommendation import IndexKind, IndexRecommendation
 from sqlcoach.models.recommendation import ConfidenceLevel, Recommendation
+from sqlcoach.models.index_hygiene import IndexHygieneFinding
 
 logger = logging.getLogger(__name__)
 
@@ -283,4 +284,62 @@ def _generic(summary: str, confidence: ConfidenceLevel) -> Recommendation:
         expected_impact="Varies with the specific issue.",
         confidence=confidence,
         risks=(),
+    )
+
+
+# ---- Index hygiene (drop recommendations) --------------------------------
+
+_HYGIENE_TEMPLATES: dict[str, _Template] = {
+    "DUPLICATE_INDEX": _Template(
+        root_cause="Another index on {relation} already covers this one, making it "
+        "redundant.",
+        technical_explanation="A redundant index is maintained on every write and "
+        "consumes storage while providing no query capability the covering index "
+        "doesn't already provide.",
+        recommended_solution="Drop the redundant index after confirming nothing "
+        "depends on it.",
+        expected_impact="Reclaims write overhead and storage with no loss of read "
+        "performance.",
+        risks=(
+            "Dropping an index is destructive -- confirm no query or constraint relies "
+            "on it before running, and prefer DROP INDEX CONCURRENTLY to avoid locking.",
+        ),
+    ),
+    "UNUSED_INDEX": _Template(
+        root_cause="The index on {relation} has (near) zero recorded scans, suggesting "
+        "nothing uses it.",
+        technical_explanation="An unused index still costs write overhead and storage "
+        "on every INSERT/UPDATE/DELETE while contributing nothing to reads.",
+        recommended_solution="Verify over a representative period, then drop the index "
+        "if it remains unused.",
+        expected_impact="Reclaims write overhead and storage.",
+        risks=(
+            "Statistics can be reset or the index may serve rare-but-critical queries; "
+            "verify before dropping. Dropping is destructive -- prefer DROP INDEX "
+            "CONCURRENTLY.",
+        ),
+    ),
+}
+
+
+def from_index_hygiene(finding: IndexHygieneFinding) -> Recommendation:
+    """Build a Recommendation from an index-hygiene (drop) finding.
+
+    The finding carries its own confidence and the generated DROP INDEX,
+    so this maps it into the narrative shape.
+    """
+    template = _HYGIENE_TEMPLATES.get(finding.code)
+    relation = finding.table
+    if template is None:
+        logger.warning("No recommendation template for hygiene code %s", finding.code)
+        return _generic(finding.summary, finding.confidence)
+    return Recommendation(
+        problem=finding.summary,
+        root_cause=_fill(template.root_cause, relation),
+        technical_explanation=_fill(template.technical_explanation, relation),
+        recommended_solution=_fill(template.recommended_solution, relation),
+        sql_example=finding.drop_statement,
+        expected_impact=_fill(template.expected_impact, relation),
+        confidence=finding.confidence,
+        risks=template.risks,
     )

@@ -177,6 +177,63 @@ def analyze_service(
     )
 
 
+def _explain_and_analyze(
+    connection,
+    queries: list[Query],
+    *,
+    confirm_mutations: bool,
+    context: AnalysisContext,
+    advisor: IndexAdvisor,
+) -> tuple[list[Finding], int, list[IndexRecommendation], list[PlanSummary]]:
+    """Run EXPLAIN ANALYZE + plan analysis for each query on an already-open
+    connection, dedupe index recommendations, and summarize each plan.
+
+    Shared by the analyze and audit commands. A query that can't be
+    explained -- a blocked mutating statement, or an EXPLAIN that errors --
+    is logged and skipped, mirroring the parser's per-statement resilience.
+    """
+    runner = ExplainRunner()
+    analyzer = PlanAnalyzer()
+    per_query: list[tuple[Query, list[Finding]]] = []
+    plan_summaries: list[PlanSummary] = []
+
+    for query in queries:
+        try:
+            raw_plan = runner.explain(
+                connection, query.text, confirm_mutations=confirm_mutations
+            )
+        except MutatingStatementError:
+            logger.warning(
+                "Skipping a statement that modifies data or takes locks; "
+                "pass --confirm-mutations to analyze it (%s)",
+                query.source_location or "unknown location",
+            )
+            continue
+        except DatabaseConnectionError as exc:
+            logger.warning(
+                "Skipping a query whose EXPLAIN failed (%s): %s",
+                query.source_location or "unknown location",
+                exc,
+            )
+            continue
+
+        plan = parse_explain_json(raw_plan)
+        per_query.append((query, analyzer.analyze(plan, context)))
+        plan_summaries.append(
+            PlanSummary(
+                root_node_type=plan.root.node_type,
+                estimated_cost=plan.root.estimated_cost,
+                execution_time_ms=plan.execution_time_ms,
+            )
+        )
+
+    findings = [finding for _, query_findings in per_query for finding in query_findings]
+    recommendations = advisor.recommend_for_workload(
+        (query.text, query_findings) for query, query_findings in per_query
+    )
+    return findings, len(per_query), recommendations, plan_summaries
+
+
 def _analyze_against_database(
     queries: list[Query],
     *,
@@ -185,57 +242,18 @@ def _analyze_against_database(
     context: AnalysisContext,
     advisor: IndexAdvisor,
 ) -> tuple[list[Finding], int, list[IndexRecommendation], list[PlanSummary]]:
-    """Run EXPLAIN ANALYZE + plan analysis for each query over one
-    connection, dedupe index recommendations, and summarize each plan.
+    """Open one connection (NFR-3.2.2) and run the shared analyze loop.
 
-    Returns the flat findings list, the count actually analyzed, the
-    deduplicated recommendations, and one PlanSummary per analyzed query.
-    One connection is reused across all queries (NFR-3.2.2). A query that
-    can't be explained -- a blocked mutating statement, or an EXPLAIN that
-    errors -- is logged and skipped rather than aborting the whole run. A
-    failure to open the connection propagates as a DatabaseConnectionError.
+    A failure to open the connection propagates as a DatabaseConnectionError.
     """
-    runner = ExplainRunner()
-    analyzer = PlanAnalyzer()
-    per_query: list[tuple[Query, list[Finding]]] = []
-    plan_summaries: list[PlanSummary] = []
-
     with DatabaseConnection(dsn=db_url) as connection:
-        for query in queries:
-            try:
-                raw_plan = runner.explain(
-                    connection, query.text, confirm_mutations=confirm_mutations
-                )
-            except MutatingStatementError:
-                logger.warning(
-                    "Skipping a statement that modifies data or takes locks; "
-                    "pass --confirm-mutations to analyze it (%s)",
-                    query.source_location or "unknown location",
-                )
-                continue
-            except DatabaseConnectionError as exc:
-                logger.warning(
-                    "Skipping a query whose EXPLAIN failed (%s): %s",
-                    query.source_location or "unknown location",
-                    exc,
-                )
-                continue
-
-            plan = parse_explain_json(raw_plan)
-            per_query.append((query, analyzer.analyze(plan, context)))
-            plan_summaries.append(
-                PlanSummary(
-                    root_node_type=plan.root.node_type,
-                    estimated_cost=plan.root.estimated_cost,
-                    execution_time_ms=plan.execution_time_ms,
-                )
-            )
-
-    findings = [finding for _, query_findings in per_query for finding in query_findings]
-    recommendations = advisor.recommend_for_workload(
-        (query.text, query_findings) for query, query_findings in per_query
-    )
-    return findings, len(per_query), recommendations, plan_summaries
+        return _explain_and_analyze(
+            connection,
+            queries,
+            confirm_mutations=confirm_mutations,
+            context=context,
+            advisor=advisor,
+        )
 
 
 def audit_service(db_url: Optional[str]) -> None:

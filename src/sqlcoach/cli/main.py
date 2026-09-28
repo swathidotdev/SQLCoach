@@ -28,12 +28,12 @@ from sqlcoach.exceptions import (
     ValidationError,
 )
 from sqlcoach.logging_config import configure_logging
+from sqlcoach.reports.audit_service import AuditResult, audit_service
 from sqlcoach.reports.comparison import ComparisonResult, compare_service
 from sqlcoach.reports.services import (
     AnalyzeResult,
     NotYetImplementedError,
     analyze_service,
-    audit_service,
     report_service,
 )
 
@@ -231,6 +231,31 @@ def _render_comparison_result(result: ComparisonResult) -> None:
         f"\nVerdict: {verdict} -- {resolved} issue(s) resolved, {introduced} introduced."
     )
 
+def _render_audit_result(result: AuditResult) -> None:
+    """Print an AuditResult: section status plus ranked recommendations."""
+    if result.sections_completed:
+        typer.echo(f"Sections run: {', '.join(result.sections_completed)}")
+    for section in result.sections_skipped:
+        typer.echo(f"Skipped {section.name}: {section.reason}")
+
+    if not result.recommendations:
+        typer.echo("No issues found.")
+        return
+
+    typer.echo(
+        f"\n{len(result.recommendations)} recommendation(s), highest impact first:\n"
+    )
+    for index, rec in enumerate(result.recommendations, start=1):
+        typer.echo(f"{index}. [{rec.confidence.value} confidence] {rec.problem}")
+        typer.echo(f"   Root cause: {rec.root_cause}")
+        typer.echo(f"   Fix: {rec.recommended_solution}")
+        if rec.sql_example:
+            typer.echo(f"   SQL: {rec.sql_example}")
+        typer.echo(f"   Impact: {rec.expected_impact}")
+        if rec.risks:
+            typer.echo(f"   Risks: {'; '.join(rec.risks)}")
+        typer.echo("")
+
 @app.command()
 def analyze(
     ctx: typer.Context,
@@ -271,12 +296,24 @@ def analyze(
 
 @app.command()
 def audit(
+    ctx: typer.Context,
     db_url: Optional[str] = typer.Option(
-        None, "--db-url", help="PostgreSQL connection string. (Not yet implemented.)"
+        None, "--db-url", help="PostgreSQL connection string to audit."
+    ),
+    confirm_mutations: bool = typer.Option(
+        False,
+        "--confirm-mutations",
+        help="Allow EXPLAIN ANALYZE to run statements that modify data or take locks.",
     ),
 ) -> None:
     """Run a full database health check (missing/duplicate/unused indexes, anti-patterns)."""
-    _run_service(lambda: audit_service(db_url))
+    settings = _settings_from(ctx)
+
+    def run() -> None:
+        result = audit_service(db_url, confirm_mutations=confirm_mutations, settings=settings)
+        _render_audit_result(result)
+
+    _run_service(run)
 
 
 @app.command()

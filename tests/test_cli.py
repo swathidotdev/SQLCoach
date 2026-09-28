@@ -31,10 +31,6 @@ class TestStubCommands:
     #     assert result.exit_code == 0
     #     assert "not yet implemented" in result.output
 
-    def test_audit_prints_not_yet_implemented_and_exits_zero(self) -> None:
-        result = runner.invoke(app, ["audit"])
-        assert result.exit_code == 0
-        assert "not yet implemented" in result.output
 
     def test_report_prints_not_yet_implemented_and_exits_zero(self) -> None:
         result = runner.invoke(app, ["report"])
@@ -46,7 +42,7 @@ class TestStubCommands:
 
 class TestJsonLogsFlag:
     def test_json_logs_flag_is_accepted(self) -> None:
-        result = runner.invoke(app, ["--json-logs", "audit"])
+        result = runner.invoke(app, ["--json-logs", "report"])
         assert result.exit_code == 0
 
 
@@ -63,7 +59,7 @@ class TestConfigErrorHandling:
     def test_missing_config_file_falls_back_to_defaults(self, tmp_path: Path) -> None:
         missing_config = tmp_path / "does_not_exist.toml"
 
-        result = runner.invoke(app, ["--config", str(missing_config), "audit"])
+        result = runner.invoke(app, ["--config", str(missing_config), "report"])
 
         assert result.exit_code == 0
         assert "not yet implemented" in result.output

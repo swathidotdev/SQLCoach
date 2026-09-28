@@ -37,6 +37,7 @@ DEFAULT_CARDINALITY_MISESTIMATION_RATIO = 10.0
 DEFAULT_CARDINALITY_MIN_ROWS = 100
 DEFAULT_COVERING_INDEX_MAX_INCLUDED_COLUMNS = 3
 DEFAULT_N_PLUS_ONE_MIN_OCCURRENCES = 5
+DEFAULT_UNUSED_INDEX_MAX_SCANS = 0
 
 
 class Settings(BaseModel):
@@ -79,6 +80,9 @@ class Settings(BaseModel):
         default=DEFAULT_N_PLUS_ONE_MIN_OCCURRENCES, ge=2
     )
 
+    unused_index_max_scans: int = Field(
+        default=DEFAULT_UNUSED_INDEX_MAX_SCANS, ge=0
+    )
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     log_level: str = "INFO"
@@ -169,6 +173,11 @@ def _read_env_overrides() -> dict[str, Any]:
     raw_n_plus_one = os.environ.get(f"{_ENV_VAR_PREFIX}N_PLUS_ONE_MIN_OCCURRENCES")
     if raw_n_plus_one is not None:
         overrides["n_plus_one_min_occurrences"] = raw_n_plus_one
+
+    raw_unused_max = os.environ.get(f"{_ENV_VAR_PREFIX}UNUSED_INDEX_MAX_SCANS")
+    if raw_unused_max is not None:
+        overrides["unused_index_max_scans"] = raw_unused_max
+        
     return overrides
 
 

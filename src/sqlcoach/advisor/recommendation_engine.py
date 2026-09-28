@@ -34,12 +34,15 @@ from typing import NamedTuple
 from sqlcoach.advisor.anti_patterns.base import AntiPatternFinding
 from sqlcoach.advisor.recommendation_builders import (
     from_anti_pattern,
+    from_index_hygiene,
     from_index_recommendation,
     from_plan_finding,
 )
 from sqlcoach.analyzer.base import Finding, Severity
 from sqlcoach.models.index_recommendation import IndexRecommendation
 from sqlcoach.models.recommendation import ConfidenceLevel, Recommendation
+from sqlcoach.advisor.impact_estimator import estimate_index_impact
+from sqlcoach.models.index_hygiene import IndexHygieneFinding
 
 _SEQ_SCAN_CODE = "SEQ_SCAN_LARGE_TABLE"
 
@@ -92,10 +95,22 @@ class RecommendationEngine:
         plan_findings: Sequence[Finding] = (),
         index_recommendations: Sequence[IndexRecommendation] = (),
         anti_pattern_findings: Sequence[AntiPatternFinding] = (),
+        index_hygiene_findings: Sequence[IndexHygieneFinding] = (),
     ) -> list[Recommendation]:
         """Produce one ranked, deduplicated recommendation list."""
         ranked: list[_Ranked] = []
         order = 0
+
+        # Rows examined per table, from seq-scan findings' ANALYZE metrics,
+        # used to quantify index-impact estimates (US11.4).
+        seq_rows_by_table: dict[str, int] = {}
+        for finding in plan_findings:
+            if finding.code == _SEQ_SCAN_CODE and finding.relation_name:
+                rows = finding.metrics.get("rows_scanned")
+                if rows is not None:
+                    seq_rows_by_table[finding.relation_name] = max(
+                        seq_rows_by_table.get(finding.relation_name, 0), int(rows)
+                    )
 
         # 1. Index recommendations (already deduped by the advisor). These
         #    also tell us which tables' seq-scan findings to fold in.
@@ -103,6 +118,11 @@ class RecommendationEngine:
         for index_rec in index_recommendations:
             indexed_tables.add(index_rec.table)
             recommendation = from_index_recommendation(index_rec)
+            rows = seq_rows_by_table.get(index_rec.table)
+            if rows is not None:
+                recommendation = recommendation.model_copy(
+                    update={"expected_impact": estimate_index_impact(rows).text}
+                )
             ranked.append(
                 _Ranked(
                     impact=_INDEX_IMPACT_TIER,
@@ -121,9 +141,16 @@ class RecommendationEngine:
             if code == _SEQ_SCAN_CODE and relation in indexed_tables:
                 continue
             representative = group[0]
-            recommendation = _with_occurrences(
-                from_plan_finding(representative), len(group)
-            )
+            recommendation = from_plan_finding(representative)
+            if code == _SEQ_SCAN_CODE and "rows_scanned" in representative.metrics:
+                recommendation = recommendation.model_copy(
+                    update={
+                        "expected_impact": estimate_index_impact(
+                            int(representative.metrics["rows_scanned"])
+                        ).text
+                    }
+                )
+            recommendation = _with_occurrences(recommendation, len(group))
             ranked.append(
                 _Ranked(
                     impact=_SEVERITY_TIER[representative.severity],
@@ -147,6 +174,20 @@ class RecommendationEngine:
                 _Ranked(
                     impact=_SEVERITY_TIER[representative.severity],
                     occurrences=len(group),
+                    confidence=_CONFIDENCE_TIER[recommendation.confidence],
+                    order=order,
+                    recommendation=recommendation,
+                )
+            )
+            order += 1
+        # 4. Index-hygiene findings (drop redundant/unused indexes). Each is
+        #    per-index and already unique.
+        for hygiene in index_hygiene_findings:
+            recommendation = from_index_hygiene(hygiene)
+            ranked.append(
+                _Ranked(
+                    impact=_SEVERITY_TIER[hygiene.severity],
+                    occurrences=1,
                     confidence=_CONFIDENCE_TIER[recommendation.confidence],
                     order=order,
                     recommendation=recommendation,
