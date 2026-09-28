@@ -1,0 +1,20 @@
+# Disposable PostgreSQL for SQLCoach integration tests.
+# Brought up on demand; not part of the app's runtime deployment.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: sqlcoach
+      POSTGRES_PASSWORD: sqlcoach
+      POSTGRES_DB: sqlcoach_test
+    ports:
+      - "5433:5432"          # 5433 on host, so it won't clash with any local Postgres on 5432
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"   # so pg_stat_statements can be enabled
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sqlcoach -d sqlcoach_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 15

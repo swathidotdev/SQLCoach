@@ -169,7 +169,7 @@ class SqlFileParser:
         """Turn one statement span into a Query, or None if it won't parse."""
         try:
             statement = sqlglot.parse_one(span.text, read=DIALECT)
-        except SqlglotParseError as exc:
+        except (SqlglotParseError, SqlglotTokenError) as exc:
             logger.warning(
                 "Skipping unparseable statement in %s at line %d: %s | snippet: %r",
                 source_location,

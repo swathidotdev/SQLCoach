@@ -41,5 +41,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "integration: requires a live PostgreSQL instance (dockerized setup lands in Phase 5).",
+    "integration: requires a live PostgreSQL instance (skipped when SQLCOACH_TEST_DB_URL is unset).",
+    "performance: slow, large-workload tests (skipped unless SQLCOACH_RUN_PERF is set).",
 ]

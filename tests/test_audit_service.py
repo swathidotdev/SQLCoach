@@ -75,3 +75,46 @@ class TestReadOnlySafety:
         for sql in executed:
             first_word = sql.strip().split(None, 1)[0].upper() if sql.strip() else ""
             assert first_word not in _MUTATING_KEYWORDS, f"audit issued a write: {sql!r}"
+
+
+class TestSectionFailureDegradation:
+    def test_index_catalog_read_failure_skips_hygiene_but_keeps_workload(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from sqlcoach.exceptions import DatabaseConnectionError
+
+        _mock_connection(monkeypatch, pg_stat_available=True, executed=[])
+        # Make the catalog read raise; the audit should skip that section,
+        # note the reason, and still complete.
+        monkeypatch.setattr(
+            audit_module,
+            "fetch_indexes",
+            lambda _conn: (_ for _ in ()).throw(DatabaseConnectionError("no catalog")),
+        )
+
+        result = audit_service("postgresql://x/y", settings=Settings())
+
+        skipped_names = {s.name for s in result.sections_skipped}
+        assert "index_catalog" in skipped_names
+        assert "duplicate_indexes" not in result.sections_completed
+        assert "workload" in result.sections_completed  # unaffected
+
+    def test_unused_index_read_failure_is_isolated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from sqlcoach.exceptions import DatabaseConnectionError
+
+        _mock_connection(monkeypatch, pg_stat_available=False, executed=[])
+        # Indexes read fine, but the usage read fails: duplicate detection
+        # still runs, unused detection is skipped.
+        monkeypatch.setattr(audit_module, "fetch_indexes", lambda _conn: [])
+        monkeypatch.setattr(
+            audit_module,
+            "fetch_index_usage",
+            lambda _conn: (_ for _ in ()).throw(DatabaseConnectionError("no stats")),
+        )
+
+        result = audit_service("postgresql://x/y", settings=Settings())
+
+        assert "duplicate_indexes" in result.sections_completed
+        assert {s.name for s in result.sections_skipped} >= {"workload", "unused_indexes"}
